@@ -5,6 +5,8 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.GradientDrawable.Orientation;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -13,7 +15,6 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
-import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -23,16 +24,34 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 
 /**
- * XiaoAiApiBridge v2.0 设置界面 (纯原生组件, 无外部依赖, 稳定防闪退)
+ * XiaoAi Bridge v5.0 设置界面
  *
- * 配置项:
- *  - HTTP 端口 (默认 8787, 被占自动避让)
- *  - API Token (留空=不鉴权; /v1/exec 强制要求)
- *  - LLM 代理 (Function Calling, 可选, Key 只存本机)
- *  - 路由表 (每行 ROUTE_前缀=BaseURL|APIKey|模型名)
- *  - 高级: 限流 / 请求日志 / 失败重试 / Verbose 日志
+ * Material Design 风格卡片式布局，纯原生组件无外部依赖。
+ * 配置项与功能保持不变，仅重构视觉效果。
  */
 public class MainActivity extends Activity {
+
+    // ---- 色板 ----
+    private static final int C_BG          = Color.parseColor("#F5F6FA");
+    private static final int C_CARD        = Color.parseColor("#FFFFFF");
+    private static final int C_PRIMARY     = Color.parseColor("#4F6EF7");
+    private static final int C_PRIMARY_DK  = Color.parseColor("#3B56C9");
+    private static final int C_ACCENT      = Color.parseColor("#6C7FF8");
+    private static final int C_TITLE       = Color.parseColor("#1A1B2E");
+    private static final int C_SUBTITLE    = Color.parseColor("#8E92A6");
+    private static final int C_LABEL       = Color.parseColor("#4A4D5E");
+    private static final int C_HINT        = Color.parseColor("#A8ACBE");
+    private static final int C_INPUT_BG    = Color.parseColor("#F7F8FC");
+    private static final int C_INPUT_BR    = Color.parseColor("#E4E7F0");
+    private static final int C_SUCCESS      = Color.parseColor("#16A34A");
+    private static final int C_SUCCESS_BG   = Color.parseColor("#ECFDF5");
+    private static final int C_ERROR        = Color.parseColor("#DC2626");
+    private static final int C_ERROR_BG     = Color.parseColor("#FEF2F2");
+    private static final int C_WARN         = Color.parseColor("#D97706");
+    private static final int C_WARN_BG      = Color.parseColor("#FFFBEB");
+    private static final int C_CARD_RADIUS  = dp_static(16);
+    private static final int C_BTN_RADIUS   = dp_static(24);
+    private static final int C_INPUT_RADIUS  = dp_static(12);
 
     private EditText etPort, etToken, etBaseUrl, etApiKey, etModel, etRoutes, etRateLimit;
     private CheckBox cbProxy, cbReqLog, cbRetry, cbVerbose;
@@ -43,165 +62,328 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(16), dp(16), dp(24));
-
+        // ---- 外层 ScrollView ----
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.addView(root, new ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.MATCH_PARENT));
+        scroll.setBackgroundColor(C_BG);
 
-        // ---------- 标题 ----------
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(0), dp(0), dp(0), dp(32));
+
+        // ==================== 渐变头部 ====================
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(24), dp(40), dp(24), dp(28));
+        GradientDrawable headerBg = new GradientDrawable(
+                Orientation.TOP_BOTTOM,
+                new int[]{C_PRIMARY, C_PRIMARY_DK});
+        headerBg.setCornerRadius(0);
+        header.setBackground(headerBg);
+
         TextView tvTitle = new TextView(this);
-        tvTitle.setText("XiaoAi API Bridge v2.0");
-        tvTitle.setTextSize(22);
+        tvTitle.setText("XiaoAi Bridge");
+        tvTitle.setTextSize(28);
         tvTitle.setTypeface(null, Typeface.BOLD);
-        tvTitle.setTextColor(Color.parseColor("#1A73E8"));
-        tvTitle.setPadding(0, 0, 0, dp(4));
-        root.addView(tvTitle);
+        tvTitle.setTextColor(Color.WHITE);
+        tvTitle.setLetterSpacing(0.02f);
+        header.addView(tvTitle);
+
+        TextView tvVersion = new TextView(this);
+        tvVersion.setText("v5.0.0");
+        tvVersion.setTextSize(13);
+        tvVersion.setTextColor(Color.parseColor("#C8CDFF"));
+        tvVersion.setTypeface(null, Typeface.BOLD);
+        tvVersion.setPadding(0, dp(2), 0, dp(10));
+        header.addView(tvVersion);
 
         TextView tvSub = new TextView(this);
-        tvSub.setText("把小爱同学 (com.miui.voiceassist) 暴露为本机 OpenAI 兼容 API\n设置保存在本机, 保存后需重启小爱同学生效");
-        tvSub.setTextSize(12);
-        tvSub.setTextColor(Color.parseColor("#666666"));
-        tvSub.setPadding(0, 0, 0, dp(12));
-        root.addView(tvSub);
+        tvSub.setText("将小米小爱语音助手暴露为本机 OpenAI 兼容 API");
+        tvSub.setTextSize(13);
+        tvSub.setTextColor(Color.parseColor("#D0D4FF"));
+        tvSub.setLineSpacing(dp(4), 1f);
+        header.addView(tvSub);
 
-        // ---------- 状态卡片 ----------
+        root.addView(header);
+
+        // 间距
+        addSpacer(root, dp(20));
+
+        // ==================== 状态卡片 ====================
+        LinearLayout statusCard = cardWithPadding(dp(16));
+        statusCard.setOrientation(LinearLayout.VERTICAL);
+
+        TextView tvStatusHeader = sectionTitle("服务状态");
+        statusCard.addView(tvStatusHeader);
+
+        addSpacer(statusCard, dp(10));
+
         tvStatus = new TextView(this);
-        tvStatus.setText("● 检测中...");
+        tvStatus.setText("\u25CF 检测中...");
         tvStatus.setTextSize(14);
-        tvStatus.setPadding(dp(12), dp(10), dp(12), dp(10));
-        tvStatus.setBackgroundColor(Color.parseColor("#F2F4F7"));
-        root.addView(tvStatus);
+        tvStatus.setTypeface(null, Typeface.BOLD);
+        tvStatus.setPadding(dp(16), dp(14), dp(16), dp(14));
+        tvStatus.setBackground(makeRoundRect(C_INPUT_BG, C_CARD_RADIUS));
+        statusCard.addView(tvStatus);
 
-        Button btnRefresh = new Button(this);
-        btnRefresh.setText("刷新状态");
+        addSpacer(statusCard, dp(10));
+
+        Button btnRefresh = styledButton("刷新状态", C_PRIMARY, false);
         btnRefresh.setOnClickListener(v -> checkStatus());
-        root.addView(btnRefresh);
+        statusCard.addView(btnRefresh);
+
+        addSpacer(statusCard, dp(16));
 
         tvRoot = new TextView(this);
-        tvRoot.setText("🔑 Root: 检测中...");
+        tvRoot.setText("\uD83D\uDD11 Root: 检测中...");
         tvRoot.setTextSize(14);
-        tvRoot.setPadding(dp(12), dp(10), dp(12), dp(10));
-        tvRoot.setBackgroundColor(Color.parseColor("#F2F4F7"));
-        root.addView(tvRoot);
+        tvRoot.setTypeface(null, Typeface.BOLD);
+        tvRoot.setPadding(dp(16), dp(14), dp(16), dp(14));
+        tvRoot.setBackground(makeRoundRect(C_INPUT_BG, C_CARD_RADIUS));
+        statusCard.addView(tvRoot);
 
-        Button btnRoot = new Button(this);
-        btnRoot.setText("测试 Root 连通 (仅测试本APP, 授权需去Magisk给voiceassist)");
+        addSpacer(statusCard, dp(10));
+
+        Button btnRoot = styledButton("测试 Root 连通", C_LABEL, false);
         btnRoot.setOnClickListener(v -> requestRootNow());
-        root.addView(btnRoot);
+        statusCard.addView(btnRoot);
 
-        // ---------- 基本设置 ----------
-        root.addView(sectionLabel("基本设置"));
+        root.addView(cardWrap(statusCard));
 
-        etPort = input("HTTP 端口 (默认 8787)", "" + Config.HTTP_PORT, InputType.TYPE_CLASS_NUMBER);
-        root.addView(fieldBlock("HTTP 端口", etPort));
+        // ==================== 基本设置卡片 ====================
+        addSpacer(root, dp(20));
 
-        etToken = input("留空=不鉴权", Config.API_TOKEN, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        root.addView(fieldBlock("API Token", etToken));
+        LinearLayout basicCard = cardWithPadding(dp(16));
+        basicCard.setOrientation(LinearLayout.VERTICAL);
 
-        etRateLimit = input("0=关闭限流", "" + Config.RATE_LIMIT, InputType.TYPE_CLASS_NUMBER);
-        root.addView(fieldBlock("限流 (次/分钟, 0=关闭)", etRateLimit));
+        basicCard.addView(sectionTitle("基本设置"));
+        addSpacer(basicCard, dp(12));
 
-        // ---------- LLM 代理 ----------
-        root.addView(sectionLabel("LLM 代理 (Function Calling)"));
+        etPort = styledInput("HTTP 端口 (默认 8787)", "" + Config.HTTP_PORT, InputType.TYPE_CLASS_NUMBER);
+        basicCard.addView(fieldBlock("HTTP 端口", etPort));
 
-        cbProxy = new CheckBox(this);
-        cbProxy.setText("启用 LLM 代理 (带 tools 请求转发到外部 LLM)");
+        etToken = styledInput("留空 = 不鉴权", Config.API_TOKEN,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        basicCard.addView(fieldBlock("API Token", etToken));
+
+        etRateLimit = styledInput("0 = 关闭限流", "" + Config.RATE_LIMIT, InputType.TYPE_CLASS_NUMBER);
+        basicCard.addView(fieldBlock("限流 (次/分钟)", etRateLimit));
+
+        root.addView(cardWrap(basicCard));
+
+        // ==================== LLM 代理卡片 ====================
+        addSpacer(root, dp(20));
+
+        LinearLayout llmCard = cardWithPadding(dp(16));
+        llmCard.setOrientation(LinearLayout.VERTICAL);
+
+        llmCard.addView(sectionTitle("LLM 代理 (Function Calling)"));
+        addSpacer(llmCard, dp(12));
+
+        cbProxy = styledCheckBox("启用 LLM 代理 (带 tools 请求转发到外部 LLM)");
         cbProxy.setChecked(Config.LLM_PROXY_ENABLED);
-        root.addView(cbProxy);
+        llmCard.addView(cbProxy);
 
-        etBaseUrl = input("https://api.deepseek.com/v1", Config.LLM_BASE_URL, InputType.TYPE_CLASS_TEXT);
-        root.addView(fieldBlock("Base URL", etBaseUrl));
+        addSpacer(llmCard, dp(8));
 
-        etApiKey = input("仅存本机", Config.LLM_API_KEY, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        root.addView(fieldBlock("API Key", etApiKey));
+        etBaseUrl = styledInput("https://api.deepseek.com/v1", Config.LLM_BASE_URL, InputType.TYPE_CLASS_TEXT);
+        llmCard.addView(fieldBlock("Base URL", etBaseUrl));
 
-        etModel = input("deepseek-v4-flash", Config.LLM_MODEL, InputType.TYPE_CLASS_TEXT);
-        root.addView(fieldBlock("模型名", etModel));
+        etApiKey = styledInput("仅存本机", Config.LLM_API_KEY,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        llmCard.addView(fieldBlock("API Key", etApiKey));
 
-        etRoutes = new EditText(this);
-        etRoutes.setText(joinRoutes(Config.LLM_ROUTES));
-        etRoutes.setTextSize(13);
-        etRoutes.setHint("路由表: 每行  前缀=BaseURL|APIKey|模型名\n例: deepseek=https://api.deepseek.com/v1|sk-xxx|deepseek-chat\n     step=https://api.stepfun.com/v1|sk-xxx|step-3.7-flash");
+        etModel = styledInput("deepseek-v4-flash", Config.LLM_MODEL, InputType.TYPE_CLASS_TEXT);
+        llmCard.addView(fieldBlock("模型名", etModel));
+
+        etRoutes = styledInput(
+                "路由表: 每行  前缀=BaseURL|APIKey|模型名\n例: deepseek=https://api.deepseek.com/v1|sk-xxx|deepseek-chat",
+                joinRoutes(Config.LLM_ROUTES), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         etRoutes.setGravity(Gravity.TOP | Gravity.START);
         etRoutes.setMinLines(4);
-        root.addView(fieldBlock("路由表", etRoutes));
+        llmCard.addView(fieldBlock("路由表", etRoutes));
 
-        // ---------- 高级 ----------
-        root.addView(sectionLabel("高级"));
+        root.addView(cardWrap(llmCard));
 
-        cbReqLog = new CheckBox(this);
-        cbReqLog.setText("记录请求日志 (最近 100 条, GET /v1/admin/logs)");
+        // ==================== 高级设置卡片 ====================
+        addSpacer(root, dp(20));
+
+        LinearLayout advCard = cardWithPadding(dp(16));
+        advCard.setOrientation(LinearLayout.VERTICAL);
+
+        advCard.addView(sectionTitle("高级设置"));
+        addSpacer(advCard, dp(12));
+
+        cbReqLog = styledCheckBox("记录请求日志 (最近 100 条, GET /v1/admin/logs)");
         cbReqLog.setChecked(Config.REQ_LOGGING);
-        root.addView(cbReqLog);
+        advCard.addView(cbReqLog);
 
-        cbRetry = new CheckBox(this);
-        cbRetry.setText("AI 调用失败自动重试 1 次");
+        addSpacer(advCard, dp(6));
+
+        cbRetry = styledCheckBox("AI 调用失败自动重试 1 次");
         cbRetry.setChecked(Config.RETRY);
-        root.addView(cbRetry);
+        advCard.addView(cbRetry);
 
-        cbVerbose = new CheckBox(this);
-        cbVerbose.setText("Verbose 调试日志");
+        addSpacer(advCard, dp(6));
+
+        cbVerbose = styledCheckBox("Verbose 调试日志");
         cbVerbose.setChecked(Config.VERBOSE);
-        root.addView(cbVerbose);
+        advCard.addView(cbVerbose);
 
-        // ---------- 保存 ----------
-        Button btnSave = new Button(this);
-        btnSave.setText("保存配置");
+        root.addView(cardWrap(advCard));
+
+        // ==================== 保存按钮 ====================
+        addSpacer(root, dp(24));
+
+        Button btnSave = styledButton("保存配置", C_PRIMARY, true);
         btnSave.setTextSize(16);
+        btnSave.setTypeface(null, Typeface.BOLD);
         btnSave.setOnClickListener(v -> saveConfig());
-        root.addView(btnSave);
+        root.addView(cardWrap(btnSave, dp(16)));
+
+        // ==================== 接入提示 ====================
+        addSpacer(root, dp(16));
 
         TextView tvHint = new TextView(this);
-        tvHint.setText("保存后重启超级小爱使配置生效。\n\n接入方式:\nBase URL: http://127.0.0.1:" + Config.HTTP_PORT + "/v1\nModel: osbot.main\n\n端点: /v1/chat/completions · /v1/chat · /v1/exec · /v1/tools · /v1/models · /health · /v1/admin/status · /v1/admin/logs");
+        tvHint.setText("保存后重启小爱同学使配置生效。\n\n"
+                + "接入方式\n"
+                + "Base URL: http://127.0.0.1:" + Config.HTTP_PORT + "/v1\n"
+                + "Model: voiceassist.main\n\n"
+                + "端点\n"
+                + "/v1/chat/completions  /v1/chat  /v1/exec\n"
+                + "/v1/tools  /v1/models  /health\n"
+                + "/v1/admin/status  /v1/admin/logs");
         tvHint.setTextSize(12);
-        tvHint.setTextColor(Color.parseColor("#888888"));
-        tvHint.setPadding(0, dp(16), 0, 0);
+        tvHint.setTextColor(C_HINT);
+        tvHint.setLineSpacing(dp(3), 1f);
+        tvHint.setPadding(dp(20), dp(16), dp(20), dp(8));
         root.addView(tvHint);
 
+        scroll.addView(root, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.MATCH_PARENT));
         setContentView(scroll);
         checkStatus();
     }
 
-    // ---------- UI 构建辅助 ----------
+    // ==================== UI 构建辅助 ====================
 
-    private TextView sectionLabel(String text) {
+    private TextView sectionTitle(String text) {
         TextView tv = new TextView(this);
         tv.setText(text);
-        tv.setTextSize(15);
+        tv.setTextSize(16);
         tv.setTypeface(null, Typeface.BOLD);
-        tv.setTextColor(Color.parseColor("#1A73E8"));
-        tv.setPadding(0, dp(16), 0, dp(4));
+        tv.setTextColor(C_TITLE);
         return tv;
+    }
+
+    private LinearLayout cardWithPadding(int pad) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(makeRoundRect(C_CARD, C_CARD_RADIUS));
+        card.setPadding(pad, pad, pad, pad);
+        return card;
+    }
+
+    private LinearLayout cardWrap(View inner) {
+        return cardWrap(inner, dp(16));
+    }
+
+    private LinearLayout cardWrap(View inner, int hMargin) {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(hMargin, 0, hMargin, 0);
+        wrap.addView(inner, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        return wrap;
     }
 
     private LinearLayout fieldBlock(String label, View edit) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(0, dp(4), 0, dp(4));
+        box.setPadding(0, dp(8), 0, dp(8));
+
         TextView tv = new TextView(this);
         tv.setText(label);
         tv.setTextSize(13);
-        tv.setTextColor(Color.parseColor("#555555"));
+        tv.setTypeface(null, Typeface.BOLD);
+        tv.setTextColor(C_LABEL);
+        tv.setPadding(dp(2), 0, 0, dp(6));
         box.addView(tv);
+
         box.addView(edit);
         return box;
     }
 
-    private EditText input(String hint, String value, int inputType) {
+    private EditText styledInput(String hint, String value, int inputType) {
         EditText et = new EditText(this);
         et.setHint(hint);
+        et.setHintTextColor(C_HINT);
         et.setText(value == null ? "" : value);
         et.setInputType(inputType);
         et.setTextSize(15);
+        et.setTextColor(C_TITLE);
+        et.setPadding(dp(14), dp(12), dp(14), dp(12));
+        et.setBackground(makeRoundRect(C_INPUT_BG, C_INPUT_RADIUS, C_INPUT_BR));
         return et;
+    }
+
+    private CheckBox styledCheckBox(String text) {
+        CheckBox cb = new CheckBox(this);
+        cb.setText(text);
+        cb.setTextSize(14);
+        cb.setTextColor(C_LABEL);
+        cb.setPadding(dp(8), dp(8), dp(8), dp(8));
+        return cb;
+    }
+
+    private Button styledButton(String text, int bgColor, boolean fullWidth) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setTextSize(14);
+        btn.setTextColor(Color.WHITE);
+        btn.setAllCaps(false);
+        btn.setTypeface(null, Typeface.BOLD);
+        btn.setPadding(dp(20), dp(14), dp(20), dp(14));
+        btn.setBackground(makeRoundRect(bgColor, C_BTN_RADIUS));
+        btn.setStateListAnimator(null);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                fullWidth ? LinearLayout.LayoutParams.MATCH_PARENT : LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = fullWidth ? Gravity.CENTER : Gravity.START;
+        btn.setLayoutParams(lp);
+        return btn;
+    }
+
+    private GradientDrawable makeRoundRect(int bgColor, int radius) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.RECTANGLE);
+        d.setColor(bgColor);
+        d.setCornerRadius(radius);
+        return d;
+    }
+
+    private GradientDrawable makeRoundRect(int bgColor, int radius, int strokeColor) {
+        GradientDrawable d = makeRoundRect(bgColor, radius);
+        d.setStroke(dp(1), strokeColor);
+        return d;
+    }
+
+    private void addSpacer(LinearLayout parent, int height) {
+        View sp = new View(this);
+        sp.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, height));
+        parent.addView(sp);
     }
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private static int dp_static(int v) {
+        return v;
     }
 
     private String joinRoutes(java.util.Map<String, String> routes) {
@@ -214,49 +396,57 @@ public class MainActivity extends Activity {
         return sb.toString();
     }
 
-    // ---------- 状态检测 ----------
+    // ==================== 状态检测 ====================
 
     private void checkStatus() {
         int port;
         try { port = Integer.parseInt(etPort.getText().toString().trim()); }
         catch (Exception e) { port = Config.HTTP_PORT; }
         final int targetPort = port;
-        tvStatus.setText("● 检测中: 127.0.0.1:" + targetPort + " ...");
+        tvStatus.setText("\u25CF 检测中: 127.0.0.1:" + targetPort + " ...");
+        tvStatus.setTextColor(C_SUBTITLE);
         new Thread(() -> {
             boolean ok = isPortOpen(targetPort);
             boolean rootOk = RootUtil.isRootAvailable();
             handler.post(() -> {
                 if (ok) {
-                    tvStatus.setText("● 服务运行中: http://127.0.0.1:" + targetPort);
-                    tvStatus.setTextColor(Color.parseColor("#188038"));
+                    tvStatus.setText("\u25CF 服务运行中  |  http://127.0.0.1:" + targetPort);
+                    tvStatus.setTextColor(C_SUCCESS);
+                    tvRoot.setBackground(makeRoundRect(C_SUCCESS_BG, C_CARD_RADIUS));
                 } else {
-                    tvStatus.setText("○ 服务未运行: 127.0.0.1:" + targetPort + " (需 LSPosed 启用模块 + 作用域勾选 com.miui.voiceassist + 重启小爱同学)");
-                    tvStatus.setTextColor(Color.parseColor("#D93025"));
+                    tvStatus.setText("\u25CB 服务未运行  |  127.0.0.1:" + targetPort
+                            + "\n需 LSPosed 启用模块 + 作用域勾选 com.miui.voiceassist + 重启小爱同学");
+                    tvStatus.setTextColor(C_ERROR);
+                    tvStatus.setBackground(makeRoundRect(C_ERROR_BG, C_CARD_RADIUS));
                 }
                 if (rootOk) {
-                    tvRoot.setText("🔑 Root: 可用 (su 正常, /v1/exec 代码执行已开启)");
-                    tvRoot.setTextColor(Color.parseColor("#188038"));
+                    tvRoot.setText("\uD83D\uDD11 Root: 可用 (su 正常, /v1/exec 已开启)");
+                    tvRoot.setTextColor(C_SUCCESS);
+                    tvRoot.setBackground(makeRoundRect(C_SUCCESS_BG, C_CARD_RADIUS));
                 } else {
-                    tvRoot.setText("🔑 Root: 不可用 - 请到 Magisk/KernelSU 授权 com.miui.voiceassist (或不用 /v1/exec)");
-                    tvRoot.setTextColor(Color.parseColor("#B06000"));
+                    tvRoot.setText("\uD83D\uDD11 Root: 不可用\n请到 Magisk/KernelSU 授权 com.miui.voiceassist");
+                    tvRoot.setTextColor(C_WARN);
+                    tvRoot.setBackground(makeRoundRect(C_WARN_BG, C_CARD_RADIUS));
                 }
             });
         }).start();
     }
 
-    /** 主动请求 root 授权: 触发 KernelSU/Magisk 弹窗, 不重启即时生效 */
     private void requestRootNow() {
-        tvRoot.setText("🔑 Root: 请求授权中... (注意看 Magisk 弹窗)");
+        tvRoot.setText("\uD83D\uDD11 Root: 请求授权中... (注意看 Magisk 弹窗)");
+        tvRoot.setTextColor(C_SUBTITLE);
         new Thread(() -> {
             boolean granted = RootUtil.requestRoot();
             handler.post(() -> {
                 if (granted) {
-                    tvRoot.setText("🔑 Root: 可用 (授权成功, 无需重启)");
-                    tvRoot.setTextColor(Color.parseColor("#188038"));
-                    Toast("Root 授权成功!");
+                    tvRoot.setText("\uD83D\uDD11 Root: 可用 (授权成功, 无需重启)");
+                    tvRoot.setTextColor(C_SUCCESS);
+                    tvRoot.setBackground(makeRoundRect(C_SUCCESS_BG, C_CARD_RADIUS));
+                    showToast("Root 授权成功!");
                 } else {
-                    tvRoot.setText("🔑 Root: 被拒绝 - 需到 Magisk 授权 com.miui.voiceassist (本按钮只能触发本APP的授权)");
-                    tvRoot.setTextColor(Color.parseColor("#D93025"));
+                    tvRoot.setText("\uD83D\uDD11 Root: 被拒绝\n需到 Magisk 授权 com.miui.voiceassist");
+                    tvRoot.setTextColor(C_ERROR);
+                    tvRoot.setBackground(makeRoundRect(C_ERROR_BG, C_CARD_RADIUS));
                 }
                 checkStatus();
             });
@@ -274,7 +464,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ---------- 保存 ----------
+    // ==================== 保存 ====================
 
     private void saveConfig() {
         try {
@@ -294,7 +484,6 @@ public class MainActivity extends Activity {
         try { Config.RATE_LIMIT = Integer.parseInt(etRateLimit.getText().toString().trim()); }
         catch (Exception e) { Config.RATE_LIMIT = 0; }
 
-        // 解析路由表
         Config.LLM_ROUTES.clear();
         String[] lines = etRoutes.getText().toString().split("\\n");
         for (String line : lines) {
@@ -308,7 +497,6 @@ public class MainActivity extends Activity {
             if (!prefix.isEmpty() && !val.isEmpty()) Config.LLM_ROUTES.put(prefix, val);
         }
 
-        // 持久化
         SharedPreferences sp = getSharedPreferences(Config.PREFS, Context.MODE_PRIVATE);
         SharedPreferences.Editor ed = sp.edit();
         ed.putInt("http_port", Config.HTTP_PORT);
@@ -324,11 +512,10 @@ public class MainActivity extends Activity {
         ed.putString("llm_routes", etRoutes.getText().toString().trim());
         ed.apply();
 
-        // 热重载: 宿主进程内存里的 Config 由 HttpServer 每请求读取; 通知已保存
-        Toast("配置已保存! 重启超级小爱后生效 (或调用 GET /v1/admin/reload)");
+        showToast("配置已保存! 重启小爱同学后生效");
     }
 
-    private void Toast(String msg) {
+    private void showToast(String msg) {
         android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show();
     }
 }

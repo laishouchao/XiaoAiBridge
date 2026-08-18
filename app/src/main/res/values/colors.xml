@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="brand">#FF6200EE</color>
-    <color name="brand_dark">#FF3700B3</color>
-    <color name="bg">#FFF6F7FB</color>
+    <color name="brand">#FF4F6EF7</color>
+    <color name="brand_dark">#FF3B56C9</color>
+    <color name="bg">#FFF5F6FA</color>
     <color name="card">#FFFFFFFF</color>
-    <color name="text_primary">#FF1A1A1A</color>
-    <color name="text_secondary">#FF666666</color>
-    <color name="success">#FF2E7D32</color>
-    <color name="error">#FFC62828</color>
+    <color name="text_primary">#FF1A1B2E</color>
+    <color name="text_secondary">#FF8E92A6</color>
+    <color name="success">#FF16A34A</color>
+    <color name="error">#FFDC2626</color>
 </resources>
