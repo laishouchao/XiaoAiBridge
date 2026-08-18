@@ -24,10 +24,9 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 
 /**
- * XiaoAi Bridge v5.0 设置界面
+ * XiaoAi Bridge v5.1 设置界面
  *
  * Material Design 风格卡片式布局，纯原生组件无外部依赖。
- * 配置项与功能保持不变，仅重构视觉效果。
  */
 public class MainActivity extends Activity {
 
@@ -36,7 +35,6 @@ public class MainActivity extends Activity {
     private static final int C_CARD        = Color.parseColor("#FFFFFF");
     private static final int C_PRIMARY     = Color.parseColor("#4F6EF7");
     private static final int C_PRIMARY_DK  = Color.parseColor("#3B56C9");
-    private static final int C_ACCENT      = Color.parseColor("#6C7FF8");
     private static final int C_TITLE       = Color.parseColor("#1A1B2E");
     private static final int C_SUBTITLE    = Color.parseColor("#8E92A6");
     private static final int C_LABEL       = Color.parseColor("#4A4D5E");
@@ -47,15 +45,13 @@ public class MainActivity extends Activity {
     private static final int C_SUCCESS_BG   = Color.parseColor("#ECFDF5");
     private static final int C_ERROR        = Color.parseColor("#DC2626");
     private static final int C_ERROR_BG     = Color.parseColor("#FEF2F2");
-    private static final int C_WARN         = Color.parseColor("#D97706");
-    private static final int C_WARN_BG      = Color.parseColor("#FFFBEB");
     private static final int C_CARD_RADIUS  = dp_static(16);
     private static final int C_BTN_RADIUS   = dp_static(24);
     private static final int C_INPUT_RADIUS  = dp_static(12);
 
-    private EditText etPort, etToken, etBaseUrl, etApiKey, etModel, etRoutes, etRateLimit;
-    private CheckBox cbProxy, cbReqLog, cbRetry, cbVerbose;
-    private TextView tvStatus, tvRoot;
+    private EditText etPort, etToken, etRateLimit;
+    private CheckBox cbReqLog, cbRetry, cbVerbose;
+    private TextView tvStatus;
     private final Handler handler = new Handler(Looper.getMainLooper());
 ;
     @Override
@@ -90,7 +86,7 @@ public class MainActivity extends Activity {
         header.addView(tvTitle);
 
         TextView tvVersion = new TextView(this);
-        tvVersion.setText("v5.0.1");
+        tvVersion.setText("v5.1.0");
         tvVersion.setTextSize(13);
         tvVersion.setTextColor(Color.parseColor("#C8CDFF"));
         tvVersion.setTypeface(null, Typeface.BOLD);
@@ -98,7 +94,7 @@ public class MainActivity extends Activity {
         header.addView(tvVersion);
 
         TextView tvSub = new TextView(this);
-        tvSub.setText("将小米小爱语音助手暴露为本机 OpenAI 兼容 API");
+        tvSub.setText("将超级小爱暴露为本机 OpenAI 兼容 API");
         tvSub.setTextSize(13);
         tvSub.setTextColor(Color.parseColor("#D0D4FF"));
         tvSub.setLineSpacing(dp(4), 1f);
@@ -132,22 +128,6 @@ public class MainActivity extends Activity {
         btnRefresh.setOnClickListener(v -> checkStatus());
         statusCard.addView(btnRefresh);
 
-        addSpacer(statusCard, dp(16));
-
-        tvRoot = new TextView(this);
-        tvRoot.setText("\uD83D\uDD11 Root: 检测中...");
-        tvRoot.setTextSize(14);
-        tvRoot.setTypeface(null, Typeface.BOLD);
-        tvRoot.setPadding(dp(16), dp(14), dp(16), dp(14));
-        tvRoot.setBackground(makeRoundRect(C_INPUT_BG, C_CARD_RADIUS));
-        statusCard.addView(tvRoot);
-
-        addSpacer(statusCard, dp(10));
-
-        Button btnRoot = styledButton("申请 Root 授权 (授权对象: 小爱同学)", C_LABEL, false);
-        btnRoot.setOnClickListener(v -> requestRootNow());
-        statusCard.addView(btnRoot);
-
         root.addView(cardWrap(statusCard));
 
         // ==================== 基本设置卡片 ====================
@@ -170,40 +150,6 @@ public class MainActivity extends Activity {
         basicCard.addView(fieldBlock("限流 (次/分钟)", etRateLimit));
 
         root.addView(cardWrap(basicCard));
-
-        // ==================== LLM 代理卡片 ====================
-        addSpacer(root, dp(20));
-
-        LinearLayout llmCard = cardWithPadding(dp(16));
-        llmCard.setOrientation(LinearLayout.VERTICAL);
-
-        llmCard.addView(sectionTitle("LLM 代理 (Function Calling)"));
-        addSpacer(llmCard, dp(12));
-
-        cbProxy = styledCheckBox("启用 LLM 代理 (带 tools 请求转发到外部 LLM)");
-        cbProxy.setChecked(Config.LLM_PROXY_ENABLED);
-        llmCard.addView(cbProxy);
-
-        addSpacer(llmCard, dp(8));
-
-        etBaseUrl = styledInput("https://api.deepseek.com/v1", Config.LLM_BASE_URL, InputType.TYPE_CLASS_TEXT);
-        llmCard.addView(fieldBlock("Base URL", etBaseUrl));
-
-        etApiKey = styledInput("仅存本机", Config.LLM_API_KEY,
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        llmCard.addView(fieldBlock("API Key", etApiKey));
-
-        etModel = styledInput("deepseek-v4-flash", Config.LLM_MODEL, InputType.TYPE_CLASS_TEXT);
-        llmCard.addView(fieldBlock("模型名", etModel));
-
-        etRoutes = styledInput(
-                "路由表: 每行  前缀=BaseURL|APIKey|模型名\n例: deepseek=https://api.deepseek.com/v1|sk-xxx|deepseek-chat",
-                joinRoutes(Config.LLM_ROUTES), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        etRoutes.setGravity(Gravity.TOP | Gravity.START);
-        etRoutes.setMinLines(4);
-        llmCard.addView(fieldBlock("路由表", etRoutes));
-
-        root.addView(cardWrap(llmCard));
 
         // ==================== 高级设置卡片 ====================
         addSpacer(root, dp(20));
@@ -245,13 +191,13 @@ public class MainActivity extends Activity {
         addSpacer(root, dp(16));
 
         TextView tvHint = new TextView(this);
-        tvHint.setText("保存后重启小爱同学使配置生效。\n\n"
+        tvHint.setText("保存后重启超级小爱使配置生效。\n\n"
                 + "接入方式\n"
                 + "Base URL: http://127.0.0.1:" + Config.HTTP_PORT + "/v1\n"
                 + "Model: voiceassist.main\n\n"
                 + "端点\n"
-                + "/v1/chat/completions  /v1/chat  /v1/exec\n"
-                + "/v1/tools  /v1/models  /health\n"
+                + "/v1/chat/completions  /v1/chat\n"
+                + "/v1/models  /health\n"
                 + "/v1/admin/status  /v1/admin/logs");
         tvHint.setTextSize(12);
         tvHint.setTextColor(C_HINT);
@@ -386,16 +332,6 @@ public class MainActivity extends Activity {
         return v;
     }
 
-    private String joinRoutes(java.util.Map<String, String> routes) {
-        StringBuilder sb = new StringBuilder();
-        if (routes != null) {
-            for (java.util.Map.Entry<String, String> e : routes.entrySet()) {
-                sb.append("ROUTE_").append(e.getKey()).append("=").append(e.getValue()).append("\n");
-            }
-        }
-        return sb.toString();
-    }
-
     // ==================== 状态检测 ====================
 
     private void checkStatus() {
@@ -405,21 +341,8 @@ public class MainActivity extends Activity {
         final int targetPort = port;
         tvStatus.setText("\u25CF 检测中: 127.0.0.1:" + targetPort + " ...");
         tvStatus.setTextColor(C_SUBTITLE);
-        tvRoot.setText("\uD83D\uDD11 Root: 检测中...");
-        tvRoot.setTextColor(C_SUBTITLE);
         new Thread(() -> {
             boolean ok = isPortOpen(targetPort);
-            // root 状态以小爱进程 (HTTP 服务所在进程) 内的实测为准
-            Boolean rootInVoiceassist = null;
-            if (ok) {
-                String resp = httpGet("http://127.0.0.1:" + targetPort + "/v1/admin/status");
-                if (resp != null) {
-                    try {
-                        rootInVoiceassist = new org.json.JSONObject(resp).optBoolean("root");
-                    } catch (Exception ignored) { }
-                }
-            }
-            final Boolean rootOk = rootInVoiceassist;
             handler.post(() -> {
                 if (ok) {
                     tvStatus.setText("\u25CF 服务运行中  |  http://127.0.0.1:" + targetPort);
@@ -427,72 +350,12 @@ public class MainActivity extends Activity {
                     tvStatus.setBackground(makeRoundRect(C_SUCCESS_BG, C_CARD_RADIUS));
                 } else {
                     tvStatus.setText("\u25CB 服务未运行  |  127.0.0.1:" + targetPort
-                            + "\n需 LSPosed 启用模块 + 作用域勾选 com.miui.voiceassist + 重启小爱同学");
+                            + "\n需 LSPosed 启用模块 + 作用域勾选 com.miui.voiceassist + 重启超级小爱");
                     tvStatus.setTextColor(C_ERROR);
                     tvStatus.setBackground(makeRoundRect(C_ERROR_BG, C_CARD_RADIUS));
                 }
-                if (rootOk == null) {
-                    tvRoot.setText("\uD83D\uDD11 Root: 无法检测 (服务未运行)\nRoot 授权对象是「小爱同学」(com.miui.voiceassist), 仅 /v1/exec 需要");
-                    tvRoot.setTextColor(C_SUBTITLE);
-                    tvRoot.setBackground(makeRoundRect(C_INPUT_BG, C_CARD_RADIUS));
-                } else if (rootOk) {
-                    tvRoot.setText("\uD83D\uDD11 Root: 已授权  |  com.miui.voiceassist\n/v1/exec (远程执行命令) 可用");
-                    tvRoot.setTextColor(C_SUCCESS);
-                    tvRoot.setBackground(makeRoundRect(C_SUCCESS_BG, C_CARD_RADIUS));
-                } else {
-                    tvRoot.setText("\uD83D\uDD11 Root: 未授权  |  com.miui.voiceassist\n点下方按钮触发授权弹窗, 在 Magisk/KernelSU 中允许「小爱同学」\n(对话 API 不受影响, 仅 /v1/exec 需要 Root)");
-                    tvRoot.setTextColor(C_WARN);
-                    tvRoot.setBackground(makeRoundRect(C_WARN_BG, C_CARD_RADIUS));
-                }
             });
         }).start();
-    }
-
-    /** 通过 HTTP 服务在小爱进程内触发 su, 由 Magisk/KernelSU 弹窗授权 com.miui.voiceassist */
-    private void requestRootNow() {
-        int port;
-        try { port = Integer.parseInt(etPort.getText().toString().trim()); }
-        catch (Exception e) { port = Config.HTTP_PORT; }
-        final int targetPort = port;
-        tvRoot.setText("\uD83D\uDD11 Root: 请求授权中... (请在手机上查看 Magisk/KernelSU 弹窗)");
-        tvRoot.setTextColor(C_SUBTITLE);
-        new Thread(() -> {
-            String resp = httpGet("http://127.0.0.1:" + targetPort + "/v1/admin/root");
-            boolean granted = false;
-            if (resp != null) {
-                try {
-                    granted = new org.json.JSONObject(resp).optBoolean("root");
-                } catch (Exception ignored) { }
-            }
-            final boolean ok = granted;
-            handler.post(() -> {
-                if (ok) {
-                    showToast("Root 授权成功!");
-                } else {
-                    showToast("未授权: 请在 Magisk/KernelSU 中允许「小爱同学」");
-                }
-                checkStatus();
-            });
-        }).start();
-    }
-
-    private String httpGet(String url) {
-        try {
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
-            conn.setConnectTimeout(1500);
-            conn.setReadTimeout(5000);
-            try (java.io.InputStream is = conn.getInputStream()) {
-                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-                byte[] buf = new byte[2048];
-                int n;
-                while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
-                return bos.toString("UTF-8");
-            } finally {
-                conn.disconnect();
-            }
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     private boolean isPortOpen(int port) {
@@ -516,45 +379,23 @@ public class MainActivity extends Activity {
         } catch (Exception e) { /* 保持默认 */ }
 
         Config.API_TOKEN = etToken.getText().toString().trim();
-        Config.LLM_PROXY_ENABLED = cbProxy.isChecked();
-        Config.LLM_BASE_URL = etBaseUrl.getText().toString().trim();
-        Config.LLM_API_KEY = etApiKey.getText().toString().trim();
-        Config.LLM_MODEL = etModel.getText().toString().trim();
         Config.REQ_LOGGING = cbReqLog.isChecked();
         Config.RETRY = cbRetry.isChecked();
         Config.VERBOSE = cbVerbose.isChecked();
         try { Config.RATE_LIMIT = Integer.parseInt(etRateLimit.getText().toString().trim()); }
         catch (Exception e) { Config.RATE_LIMIT = 0; }
 
-        Config.LLM_ROUTES.clear();
-        String[] lines = etRoutes.getText().toString().split("\\n");
-        for (String line : lines) {
-            line = line.trim();
-            if (line.isEmpty() || line.startsWith("#")) continue;
-            int eq = line.indexOf('=');
-            if (eq <= 0) continue;
-            String prefix = line.substring(0, eq).trim();
-            String val = line.substring(eq + 1).trim();
-            if (prefix.startsWith("ROUTE_")) prefix = prefix.substring(6);
-            if (!prefix.isEmpty() && !val.isEmpty()) Config.LLM_ROUTES.put(prefix, val);
-        }
-
         SharedPreferences sp = getSharedPreferences(Config.PREFS, Context.MODE_PRIVATE);
         SharedPreferences.Editor ed = sp.edit();
         ed.putInt("http_port", Config.HTTP_PORT);
         ed.putString("api_token", Config.API_TOKEN);
-        ed.putBoolean("llm_proxy_enabled", Config.LLM_PROXY_ENABLED);
-        ed.putString("llm_base_url", Config.LLM_BASE_URL);
-        ed.putString("llm_api_key", Config.LLM_API_KEY);
-        ed.putString("llm_model", Config.LLM_MODEL);
         ed.putBoolean("req_logging", Config.REQ_LOGGING);
         ed.putBoolean("retry", Config.RETRY);
         ed.putBoolean("verbose", Config.VERBOSE);
         ed.putInt("rate_limit", Config.RATE_LIMIT);
-        ed.putString("llm_routes", etRoutes.getText().toString().trim());
         ed.apply();
 
-        showToast("配置已保存! 重启小爱同学后生效");
+        showToast("配置已保存! 重启超级小爱后生效");
     }
 
     private void showToast(String msg) {

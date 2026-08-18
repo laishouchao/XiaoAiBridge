@@ -4,9 +4,6 @@ import android.content.Context;
 import org.json.JSONObject;
 import org.json.JSONArray;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileWriter;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -17,16 +14,14 @@ import java.util.concurrent.Executors;
 
 /**
  * 极简 HTTP 服务器 (0.0.0.0)
- * 提供 OpenAI 兼容 API: /v1/chat/completions (流式+非流式) /v1/models /openapi.json /health
- * v2.2: 适配 com.miui.voiceassist, 使用 AiClientHook 替代 CliClient
+ * 提供 OpenAI 兼容 API: /v1/chat/completions (流式+非流式) /v1/models /health
  */
 public class HttpServer {
 
     private final Context context;
-    private final CliClient cli;  // 保留用于 sendRaw 等兼容接口
+    private final CliClient cli;
     private static final boolean CORS = true;
 
-    // v2.0: 限流 + 请求日志
     private final java.util.List<JSONObject> reqLog = new java.util.ArrayList<>();
     private int reqCount = 0;
     private long reqWindowStart = System.currentTimeMillis();
@@ -39,11 +34,8 @@ public class HttpServer {
     public void start() {
         new Thread(() -> {
             try {
-                // v2.2: voiceassist 不需要 socket 探测, 直接标记就绪
                 Config.activeSocket = "voiceassist-internal";
-                Logger.d("Mode: voiceassist (AiClientHook), no socket needed");
-                // v2.1: 服务启动即主动请求 root 授权
-                RootUtil.requestRoot();
+                Logger.d("Mode: voiceassist (AiClientHook)");
             } catch (Exception e) {
                 Logger.e("Init error: " + e.getMessage());
             }
@@ -53,7 +45,6 @@ public class HttpServer {
             try {
                 int port = Config.HTTP_PORT;
                 ServerSocket serverSocket = null;
-                // 端口被占时自动递增避让 (最多 +5)
                 for (int attempt = 0; attempt < 5; attempt++) {
                     try {
                         serverSocket = new ServerSocket();
@@ -141,7 +132,7 @@ public class HttpServer {
                 client.close(); return;
             }
 
-            // v2.0 限流 (RATE_LIMIT=0 关闭)
+            // 限流 (RATE_LIMIT=0 关闭)
             if (Config.RATE_LIMIT > 0) {
                 long now = System.currentTimeMillis();
                 if (now - reqWindowStart > 60000) { reqWindowStart = now; reqCount = 0; }
@@ -158,7 +149,7 @@ public class HttpServer {
             } else if ("/".equals(path)) {
                 JSONObject r = new JSONObject();
                 r.put("name", "XiaoAiApiBridge");
-                r.put("version", "2.2.0");
+                r.put("version", "5.1.0");
                 r.put("docs", "/openapi.json");
                 r.put("models", "/v1/models");
                 sendResponse(os, 200, r.toString());
@@ -167,7 +158,6 @@ public class HttpServer {
                 r.put("status", "ok");
                 r.put("agent", Config.defaultAgentId);
                 r.put("socket", Config.activeSocket);
-                r.put("root", RootUtil.isRootAvailable());
                 sendResponse(os, 200, r.toString());
             } else if ("/openapi.json".equals(path)) {
                 sendResponse(os, 200, OpenAiCompat.openapiDoc().toString());
@@ -177,27 +167,22 @@ public class HttpServer {
             } else if ("/v1/admin/status".equals(path) && "GET".equals(method)) {
                 JSONObject st = new JSONObject();
                 st.put("status", "ok");
-                st.put("version", "2.2.0");
+                st.put("version", "5.1.0");
                 st.put("agent", Config.defaultAgentId);
                 st.put("agentName", Config.agentName);
                 st.put("socket", Config.activeSocket);
-                st.put("root", RootUtil.isRootAvailable());
-                st.put("llmProxy", Config.LLM_PROXY_ENABLED && Config.LLM_API_KEY != null && !Config.LLM_API_KEY.isEmpty());
-                st.put("routes", Config.LLM_ROUTES.size());
+                st.put("routes", 0);
                 sendResponse(os, 200, st.toString());
             } else if ("/v1/tools".equals(path) && "GET".equals(method)) {
                 JSONObject tr = new JSONObject();
                 tr.put("object", "list");
-                tr.put("proxy", Config.LLM_PROXY_ENABLED && !Config.LLM_API_KEY.isEmpty());
-                tr.put("model", Config.LLM_MODEL);
-                tr.put("note", "小爱同学内置工具由它自动调用; LSPilot 自定义工具走 LLM 代理");
+                tr.put("note", "超级小爱内置工具由它自动调用");
                 sendResponse(os, 200, tr.toString());
             } else if ("/v1/chat/completions".equals(path) && "POST".equals(method)) {
                 handleChatCompletions(os, body);
             } else if ("/v1/chat".equals(path) && "POST".equals(method)) {
                 handleV1Chat(os, body);
             } else if ("/v1/chat/reset".equals(path) && "POST".equals(method)) {
-                // v2.2: voiceassist 模式下重置会话 (本地清除)
                 JSONObject reqObj = new JSONObject(body);
                 String chatId = reqObj.has("chat_id") ? reqObj.optString("chat_id")
                         : (reqObj.has("user") ? reqObj.optString("user") : Config.API_CHAT_ID);
@@ -206,39 +191,25 @@ public class HttpServer {
                 resp.put("ok", true);
                 resp.put("chat_id", chatId);
                 resp.put("cleared", "local");
-                resp.put("note", "voiceassist 模式: 会话由小爱管理");
+                resp.put("note", "voiceassist 模式: 会话由超级小爱管理");
                 sendResponse(os, 200, resp.toString());
             } else if ("/v1/admin/logs".equals(path) && "GET".equals(method)) {
-                // v2.0 请求日志 (最近 100 条)
                 JSONObject lr = new JSONObject();
                 lr.put("count", reqLog.size());
                 lr.put("logs", new JSONArray(reqLog));
                 sendResponse(os, 200, lr.toString());
             } else if ("/v1/admin/reload".equals(path) && "GET".equals(method)) {
-                // v2.0 配置热重载 (从 SharedPreferences 重读)
                 Config.loadFrom(context.getApplicationContext());
                 JSONObject rr = new JSONObject();
                 rr.put("ok", true);
                 rr.put("port", Config.HTTP_PORT);
                 sendResponse(os, 200, rr.toString());
-            } else if ("/v1/admin/root".equals(path) && "GET".equals(method)) {
-                // v2.1 主动请求 root 授权并返回状态 (不重启即时生效)
-                boolean granted = RootUtil.requestRoot();
-                JSONObject rt = new JSONObject();
-                rt.put("ok", granted);
-                rt.put("root", granted);
-                rt.put("hint", granted
-                    ? "root 已授权"
-                    : "被拒绝: 请到 KernelSU/Magisk 允许 com.miui.voiceassist 后重试本端点");
-                sendResponse(os, 200, rt.toString());
-            } else if ("/v1/exec".equals(path) && "POST".equals(method)) {
-                handleExec(os, body);
             } else {
                 sendResponse(os, 404, OpenAiCompat.buildError(
                     "Not Found", "invalid_request_error", "not_found").toString());
             }
 
-            // v2.0 请求日志
+            // 请求日志
             if (Config.REQ_LOGGING) {
                 try {
                     JSONObject logEntry = new JSONObject();
@@ -258,7 +229,6 @@ public class HttpServer {
         }
     }
 
-    /** v2.2: 使用 AiClientHook 替代 CliClient */
     private CliClient.CliResult chatWithRetry(String text, String chatId, String agentId,
             CliClient.TextSink sink, org.json.JSONArray images) {
         CliClient.CliResult r = AiClientHook.chat(text, chatId, agentId, sink, images);
@@ -268,80 +238,6 @@ public class HttpServer {
             r = AiClientHook.chat(text, chatId, agentId, sink, images);
         }
         return r;
-    }
-
-    /** 代码执行沙箱 (root): shell / python - Java 版, 无 BSH 兼容问题 */
-    private void handleExec(OutputStream os, String body) throws Exception {
-        // 安全: 必须已配置 API_TOKEN
-        if (Config.API_TOKEN == null || Config.API_TOKEN.isEmpty()) {
-            sendResponse(os, 400, OpenAiCompat.buildError(
-                "exec requires API_TOKEN (security)", "invalid_request_error", "token_required").toString());
-            return;
-        }
-        JSONObject reqObj = new JSONObject(body);
-        String language = reqObj.optString("language", "shell");
-        String code = reqObj.optString("code", "");
-        if (code.isEmpty()) {
-            sendResponse(os, 400, OpenAiCompat.buildError(
-                "missing 'code'", "invalid_request_error", "missing_code").toString());
-            return;
-        }
-
-        File tmpFile = new File(context.getCacheDir(), "exec_" + System.currentTimeMillis() + (language.equals("python") ? ".py" : ".sh"));
-        File outFile = new File(context.getCacheDir(), "exec_out_" + System.currentTimeMillis() + ".txt");
-        boolean done = false;
-        try {
-            FileWriter fw = new FileWriter(tmpFile);
-            fw.write(code);
-            fw.close();
-            tmpFile.setExecutable(true);
-
-            String cmd;
-            if (language.equals("python")) {
-                cmd = "/usr/bin/python3.12 " + tmpFile.getAbsolutePath();
-            } else {
-                cmd = "sh " + tmpFile.getAbsolutePath();
-            }
-            // root 执行 + 输出重定向到文件 (避免管道阻塞)
-            Logger.d("exec: " + cmd + " (root=" + RootUtil.isRootAvailable() + ")");
-            ProcessBuilder pb = new ProcessBuilder("su", "-c", cmd + " > " + outFile.getAbsolutePath() + " 2>&1");
-            Process proc = null;
-            try {
-                proc = pb.start();
-            } catch (Exception e) {
-                // 无 root 时降级: 直接以当前进程执行
-                Logger.d("exec no-root fallback: " + e.getMessage());
-                pb = new ProcessBuilder("sh", "-c", cmd + " > " + outFile.getAbsolutePath() + " 2>&1");
-                proc = pb.start();
-            }
-            done = proc.waitFor(30, java.util.concurrent.TimeUnit.SECONDS);
-            if (!done) proc.destroy();
-
-            String stdout = "";
-            if (outFile.exists()) {
-                FileInputStream fis = new FileInputStream(outFile);
-                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-                byte[] buf = new byte[4096];
-                int n;
-                while ((n = fis.read(buf)) >= 0) baos.write(buf, 0, n);
-                fis.close();
-                stdout = new String(baos.toByteArray(), "UTF-8");
-            }
-
-            int exit = -1;
-            try { exit = proc.exitValue(); } catch (Exception ignored) {}
-
-            JSONObject resp = new JSONObject();
-            resp.put("language", language);
-            resp.put("stdout", stdout);
-            resp.put("stderr", "");
-            resp.put("exit_code", exit);
-            resp.put("timed_out", !done);
-            sendResponse(os, 200, resp.toString());
-        } finally {
-            tmpFile.delete();
-            outFile.delete();
-        }
     }
 
     private void handleV1Chat(OutputStream os, String body) throws Exception {
@@ -371,39 +267,11 @@ public class HttpServer {
         boolean stream = reqObj.optBoolean("stream", false);
         String model = reqObj.optString("model", "miclaw");
         JSONArray messages = reqObj.optJSONArray("messages");
-        JSONArray tools = reqObj.optJSONArray("tools");
 
-        // LLM 代理: 路由表匹配 model 前缀才转发 (DeepSeek/Step 等), 否则走超级小爱
-        String proxyBase = Config.LLM_BASE_URL;
-        String proxyKey = Config.LLM_API_KEY;
-        String proxyModel = Config.LLM_MODEL;
-        String matchedRoute = null;
-        if (Config.LLM_PROXY_ENABLED && Config.LLM_API_KEY != null
-            && !Config.LLM_API_KEY.isEmpty() && tools != null && tools.length() > 0) {
-            for (java.util.Map.Entry<String, String> e : Config.LLM_ROUTES.entrySet()) {
-                if (model != null && model.startsWith(e.getKey())) {
-                    String[] parts = e.getValue().split("\\|");
-                    if (parts.length >= 3) {
-                        proxyBase = parts[0];
-                        proxyKey = parts[1];
-                        proxyModel = parts[2];
-                    }
-                    matchedRoute = e.getKey();
-                    break;
-                }
-            }
-        }
-        if (matchedRoute != null) {
-            Logger.d("FunctionCalling: proxy via route '" + matchedRoute + "' model=" + proxyModel);
-            proxyLLM(os, body, stream, proxyBase, proxyKey, proxyModel);
-            return;
-        }
         // 拼接 messages (system + history + user) - 支持多模态图片
         JSONArray imagesArr = new JSONArray();
         StringBuilder sb = new StringBuilder();
 
-        // 默认大模型人设 (无 system 时注入)
-        // v3.6: voiceassist 模型跳过系统提示词, 直接发送用户消息
         boolean isVoiceAssist = model != null && model.startsWith("voiceassist.");
         boolean hasSystem = false;
         if (messages != null) {
@@ -454,7 +322,7 @@ public class HttpServer {
             }
         }
 
-        // JSON 模式 + 参数映射 (更像大模型)
+        // JSON 模式 + 参数映射
         boolean jsonMode = false;
         JSONObject rf = reqObj.optJSONObject("response_format");
         if (rf != null && "json_object".equals(rf.optString("type", ""))) {
@@ -536,66 +404,6 @@ public class HttpServer {
             if (b != 13) sb.append((char) b);
         }
         return sb.toString();
-    }
-
-    /**
-     * LLM 代理: 转发到 OpenAI 兼容模型 (DeepSeek), 支持流式透传
-     * API Key 从 Config (SharedPreferences) 读取, 不写死在代码
-     */
-    private void proxyLLM(OutputStream os, String body, boolean stream, String baseUrl, String apiKey, String proxyModel) {
-        java.net.HttpURLConnection conn = null;
-        try {
-            // 重写 model 为代理模型
-            JSONObject b = new JSONObject(body);
-            b.put("model", proxyModel);
-            String outBody = b.toString();
-
-            java.net.URL url = new java.net.URL(baseUrl + "/chat/completions");
-            conn = (java.net.HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("Authorization", "Bearer " + apiKey);
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(120000);
-            conn.getOutputStream().write(outBody.getBytes("UTF-8"));
-
-            int code = conn.getResponseCode();
-            java.io.InputStream is = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
-
-            if (stream) {
-                StringBuilder h = new StringBuilder();
-                h.append("HTTP/1.1 200 OK\r\n");
-                if (CORS) h.append("Access-Control-Allow-Origin: *\r\n");
-                h.append("Content-Type: text/event-stream; charset=utf-8\r\n");
-                h.append("Cache-Control: no-cache\r\nConnection: close\r\n\r\n");
-                os.write(h.toString().getBytes("UTF-8"));
-                os.flush();
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = is.read(buf)) >= 0) {
-                    os.write(buf, 0, n);
-                    os.flush();
-                }
-            } else {
-                StringBuilder sb = new StringBuilder();
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = is.read(buf)) >= 0) {
-                    sb.append(new String(buf, 0, n, "UTF-8"));
-                }
-                sendResponse(os, code, sb.toString());
-            }
-            if (is != null) try { is.close(); } catch (Exception ignored) {}
-        } catch (Exception e) {
-            Logger.e("proxyLLM: " + e.getMessage());
-            try {
-                sendResponse(os, 502, OpenAiCompat.buildError(
-                    "LLM proxy error: " + e.getMessage(), "server_error", "proxy_error").toString());
-            } catch (Exception ignored) {}
-        } finally {
-            if (conn != null) conn.disconnect();
-        }
     }
 
     private void sendResponse(OutputStream os, int code, String body) throws Exception {

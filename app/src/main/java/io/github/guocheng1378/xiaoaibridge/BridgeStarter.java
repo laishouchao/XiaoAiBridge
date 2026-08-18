@@ -44,7 +44,7 @@ public class BridgeStarter {
             Config.loadFrom(appCtx);
             HttpServer server = new HttpServer(appCtx);
             server.start();
-            Logger.d("XiaoAi Bridge started (v5.0.0) build=50");
+            Logger.d("XiaoAi Bridge started (v5.1.0) build=52");
         } catch (Throwable t) {
             Logger.e("Bridge start failed", t);
             started.set(false);

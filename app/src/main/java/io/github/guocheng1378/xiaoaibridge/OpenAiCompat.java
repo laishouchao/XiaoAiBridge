@@ -151,7 +151,7 @@ public class OpenAiCompat {
             JSONObject info = new JSONObject();
             info.put("title", "MiclawApiBridge");
             info.put("version", "1.1.0");
-            info.put("description", "把小米小爱同学(com.miui.voiceassist)的 AI 能力暴露为 OpenAI 兼容 API");
+            info.put("description", "把小米超级小爱(com.miui.voiceassist)的 AI 能力暴露为 OpenAI 兼容 API");
             doc.put("info", info);
 
             JSONObject paths = new JSONObject();
