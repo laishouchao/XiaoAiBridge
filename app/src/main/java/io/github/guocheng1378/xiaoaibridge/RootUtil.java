@@ -7,8 +7,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * Root 权限检测与执行 (su)
  *
- * 模块代码注入到 com.aios.osbot 进程, su 请求以 osbot 身份发出,
- * 需在 Magisk/KernelSU 授权列表中允许 com.aios.osbot (首次会弹窗).
+ * 模块代码注入到 com.miui.voiceassist 进程, su 请求以小爱同学身份发出,
+ * 需在 Magisk/KernelSU 授权列表中允许 com.miui.voiceassist (首次会弹窗).
  */
 public class RootUtil {
 

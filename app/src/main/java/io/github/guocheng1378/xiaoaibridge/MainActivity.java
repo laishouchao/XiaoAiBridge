@@ -57,7 +57,7 @@ public class MainActivity extends Activity {
     private CheckBox cbProxy, cbReqLog, cbRetry, cbVerbose;
     private TextView tvStatus, tvRoot;
     private final Handler handler = new Handler(Looper.getMainLooper());
-
+;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -90,7 +90,7 @@ public class MainActivity extends Activity {
         header.addView(tvTitle);
 
         TextView tvVersion = new TextView(this);
-        tvVersion.setText("v5.0.0");
+        tvVersion.setText("v5.0.1");
         tvVersion.setTextSize(13);
         tvVersion.setTextColor(Color.parseColor("#C8CDFF"));
         tvVersion.setTypeface(null, Typeface.BOLD);
@@ -144,7 +144,7 @@ public class MainActivity extends Activity {
 
         addSpacer(statusCard, dp(10));
 
-        Button btnRoot = styledButton("测试 Root 连通", C_LABEL, false);
+        Button btnRoot = styledButton("申请 Root 授权 (授权对象: 小爱同学)", C_LABEL, false);
         btnRoot.setOnClickListener(v -> requestRootNow());
         statusCard.addView(btnRoot);
 
@@ -405,26 +405,42 @@ public class MainActivity extends Activity {
         final int targetPort = port;
         tvStatus.setText("\u25CF 检测中: 127.0.0.1:" + targetPort + " ...");
         tvStatus.setTextColor(C_SUBTITLE);
+        tvRoot.setText("\uD83D\uDD11 Root: 检测中...");
+        tvRoot.setTextColor(C_SUBTITLE);
         new Thread(() -> {
             boolean ok = isPortOpen(targetPort);
-            boolean rootOk = RootUtil.isRootAvailable();
+            // root 状态以小爱进程 (HTTP 服务所在进程) 内的实测为准
+            Boolean rootInVoiceassist = null;
+            if (ok) {
+                String resp = httpGet("http://127.0.0.1:" + targetPort + "/v1/admin/status");
+                if (resp != null) {
+                    try {
+                        rootInVoiceassist = new org.json.JSONObject(resp).optBoolean("root");
+                    } catch (Exception ignored) { }
+                }
+            }
+            final Boolean rootOk = rootInVoiceassist;
             handler.post(() -> {
                 if (ok) {
                     tvStatus.setText("\u25CF 服务运行中  |  http://127.0.0.1:" + targetPort);
                     tvStatus.setTextColor(C_SUCCESS);
-                    tvRoot.setBackground(makeRoundRect(C_SUCCESS_BG, C_CARD_RADIUS));
+                    tvStatus.setBackground(makeRoundRect(C_SUCCESS_BG, C_CARD_RADIUS));
                 } else {
                     tvStatus.setText("\u25CB 服务未运行  |  127.0.0.1:" + targetPort
                             + "\n需 LSPosed 启用模块 + 作用域勾选 com.miui.voiceassist + 重启小爱同学");
                     tvStatus.setTextColor(C_ERROR);
                     tvStatus.setBackground(makeRoundRect(C_ERROR_BG, C_CARD_RADIUS));
                 }
-                if (rootOk) {
-                    tvRoot.setText("\uD83D\uDD11 Root: 可用 (su 正常, /v1/exec 已开启)");
+                if (rootOk == null) {
+                    tvRoot.setText("\uD83D\uDD11 Root: 无法检测 (服务未运行)\nRoot 授权对象是「小爱同学」(com.miui.voiceassist), 仅 /v1/exec 需要");
+                    tvRoot.setTextColor(C_SUBTITLE);
+                    tvRoot.setBackground(makeRoundRect(C_INPUT_BG, C_CARD_RADIUS));
+                } else if (rootOk) {
+                    tvRoot.setText("\uD83D\uDD11 Root: 已授权  |  com.miui.voiceassist\n/v1/exec (远程执行命令) 可用");
                     tvRoot.setTextColor(C_SUCCESS);
                     tvRoot.setBackground(makeRoundRect(C_SUCCESS_BG, C_CARD_RADIUS));
                 } else {
-                    tvRoot.setText("\uD83D\uDD11 Root: 不可用\n请到 Magisk/KernelSU 授权 com.miui.voiceassist");
+                    tvRoot.setText("\uD83D\uDD11 Root: 未授权  |  com.miui.voiceassist\n点下方按钮触发授权弹窗, 在 Magisk/KernelSU 中允许「小爱同学」\n(对话 API 不受影响, 仅 /v1/exec 需要 Root)");
                     tvRoot.setTextColor(C_WARN);
                     tvRoot.setBackground(makeRoundRect(C_WARN_BG, C_CARD_RADIUS));
                 }
@@ -432,25 +448,51 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /** 通过 HTTP 服务在小爱进程内触发 su, 由 Magisk/KernelSU 弹窗授权 com.miui.voiceassist */
     private void requestRootNow() {
-        tvRoot.setText("\uD83D\uDD11 Root: 请求授权中... (注意看 Magisk 弹窗)");
+        int port;
+        try { port = Integer.parseInt(etPort.getText().toString().trim()); }
+        catch (Exception e) { port = Config.HTTP_PORT; }
+        final int targetPort = port;
+        tvRoot.setText("\uD83D\uDD11 Root: 请求授权中... (请在手机上查看 Magisk/KernelSU 弹窗)");
         tvRoot.setTextColor(C_SUBTITLE);
         new Thread(() -> {
-            boolean granted = RootUtil.requestRoot();
+            String resp = httpGet("http://127.0.0.1:" + targetPort + "/v1/admin/root");
+            boolean granted = false;
+            if (resp != null) {
+                try {
+                    granted = new org.json.JSONObject(resp).optBoolean("root");
+                } catch (Exception ignored) { }
+            }
+            final boolean ok = granted;
             handler.post(() -> {
-                if (granted) {
-                    tvRoot.setText("\uD83D\uDD11 Root: 可用 (授权成功, 无需重启)");
-                    tvRoot.setTextColor(C_SUCCESS);
-                    tvRoot.setBackground(makeRoundRect(C_SUCCESS_BG, C_CARD_RADIUS));
+                if (ok) {
                     showToast("Root 授权成功!");
                 } else {
-                    tvRoot.setText("\uD83D\uDD11 Root: 被拒绝\n需到 Magisk 授权 com.miui.voiceassist");
-                    tvRoot.setTextColor(C_ERROR);
-                    tvRoot.setBackground(makeRoundRect(C_ERROR_BG, C_CARD_RADIUS));
+                    showToast("未授权: 请在 Magisk/KernelSU 中允许「小爱同学」");
                 }
                 checkStatus();
             });
         }).start();
+    }
+
+    private String httpGet(String url) {
+        try {
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setConnectTimeout(1500);
+            conn.setReadTimeout(5000);
+            try (java.io.InputStream is = conn.getInputStream()) {
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[2048];
+                int n;
+                while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+                return bos.toString("UTF-8");
+            } finally {
+                conn.disconnect();
+            }
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private boolean isPortOpen(int port) {
