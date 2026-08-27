@@ -438,15 +438,19 @@ public class HttpServer {
                 + " bytes -> " + chunks.size() + " chunks");
         String summary = null;
         for (int i = 0; i < chunks.size(); i++) {
+            // v5.2.2: 块间冷却 1.5s, 等待上一轮残留事件 (Dialog.Finish 等) 完全清理
+            if (i > 0) {
+                Logger.d("AutoChunk: cooldown 1500ms before chunk " + (i + 1));
+                Thread.sleep(1500);
+            }
             StringBuilder p = new StringBuilder();
             if (i == 0) {
-                p.append("你在接收一份长内容的分段传输，本段为第1段。请输出不超过600字的详细摘要，")
-                        .append("保留全部关键事实（名称、数字、日期、结论、用户提出的问题）：\n\n");
+                p.append("你在接收一份长内容的分段传输，本段为第1段。")
+                        .append("请用不超过300字简洁概括，保留全部关键事实（名称、数字、日期、结论）：\n\n");
             } else {
                 p.append("你在接收一份长内容的分段传输。前文摘要：\n").append(summary)
                         .append("\n\n以下是第").append(i + 1)
-                        .append("段。请融合前文摘要与本段内容，输出不超过600字的更新摘要，")
-                        .append("必须保留之前所有关键事实：\n\n");
+                        .append("段。请融合前文与本段，用不超过300字输出更新摘要，保留所有关键事实：\n\n");
             }
             p.append(chunks.get(i));
 
