@@ -264,8 +264,8 @@ public class HttpServer {
     private void handleChatCompletions(OutputStream os, String body) throws Exception {
         JSONObject reqObj = new JSONObject(body);
         boolean stream = reqObj.optBoolean("stream", false);
-        String model = reqObj.optString("model", Config.MODEL_NAME);
-        if (model == null || model.isEmpty()) model = Config.MODEL_NAME;
+        String modelRaw = reqObj.optString("model", Config.MODEL_NAME);
+        final String model = (modelRaw == null || modelRaw.isEmpty()) ? Config.MODEL_NAME : modelRaw;
         JSONArray messages = reqObj.optJSONArray("messages");
 
         // 拼接 messages (system + history + user) - 支持多模态图片
