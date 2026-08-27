@@ -289,6 +289,8 @@ public class AiClientHook {
 
     // === 响应同步 ===
     private static final Object lock = new Object();
+    // v5.3.0: 全局互斥锁, 防止并发 chat() 调用互相覆盖 currentDialogId
+    private static final Object chatLock = new Object();
     private static CountDownLatch responseLatch = null;
     private static String lastReply = null;
     private static String lastError = null;
@@ -624,6 +626,7 @@ public class AiClientHook {
      * 响应事件按 dialog_id 门控, 避免上一轮迟到的 Dialog.Finish 提前释放本轮闩锁
      */
     public static CliClient.CliResult chat(String text, String chatId, String agentId, CliClient.TextSink sink, Object images) {
+        synchronized (chatLock) {  // v5.3.0: 串行化, 防止并发覆盖 currentDialogId
         Logger.d("AiClientHook: chat called, text=" + truncate(text, 100));
 
         // 1. 先构建请求事件 (耗时操作, 在重置响应槽之前完成)
@@ -670,6 +673,7 @@ public class AiClientHook {
             if (!completed && error == null) error = "TIMEOUT: Intent fallback";
             return new CliClient.CliResult(reply, error, chatId, lastFrames);
         }
+        }  // v5.3.0: end chatLock
     }
 
     /** v5.2.1: 构建 Nlp.RequestLargeLanguageModelContent 事件 (自 sendViaPostEvent 拆出) */

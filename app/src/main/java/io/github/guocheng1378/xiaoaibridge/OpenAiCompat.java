@@ -154,7 +154,7 @@ public class OpenAiCompat {
             doc.put("openapi", "3.0.0");
             JSONObject info = new JSONObject();
             info.put("title", "XiaoAiBridge");
-            info.put("version", "5.3.0");
+            info.put("version", "5.3.1");
             info.put("description", "把小米超级小爱(com.miui.voiceassist)的 AI 能力暴露为 OpenAI 兼容 API");
             doc.put("info", info);
 
