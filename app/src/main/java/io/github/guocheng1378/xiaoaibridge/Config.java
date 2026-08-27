@@ -22,6 +22,7 @@ public class Config {
     public static int RATE_LIMIT = 0;           // 每分钟最大请求数, 0=关闭
     public static boolean REQ_LOGGING = true;   // 记录请求日志 (最近 100 条)
     public static boolean RETRY = true;         // AI 调用失败自动重试 1 次
+    public static boolean AUTO_CHUNK = true;    // 超长输入自动分块+滚动摘要 (绕过单次上限)
     public static boolean VERBOSE = false;      // Verbose 调试日志
 
     // 运行时状态
@@ -38,6 +39,7 @@ public class Config {
             RATE_LIMIT = sp.getInt("rate_limit", RATE_LIMIT);
             REQ_LOGGING = sp.getBoolean("req_logging", REQ_LOGGING);
             RETRY = sp.getBoolean("retry", RETRY);
+            AUTO_CHUNK = sp.getBoolean("auto_chunk", AUTO_CHUNK);
             VERBOSE = sp.getBoolean("verbose", VERBOSE);
             Logger.d("Config loaded: port=" + HTTP_PORT
                 + " limit=" + RATE_LIMIT

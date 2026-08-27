@@ -149,7 +149,7 @@ public class HttpServer {
             } else if ("/".equals(path)) {
                 JSONObject r = new JSONObject();
                 r.put("name", "XiaoAiApiBridge");
-                r.put("version", "5.1.2");
+                r.put("version", "5.2.0");
                 r.put("docs", "/openapi.json");
                 r.put("models", "/v1/models");
                 sendResponse(os, 200, r.toString());
@@ -167,7 +167,7 @@ public class HttpServer {
             } else if ("/v1/admin/status".equals(path) && "GET".equals(method)) {
                 JSONObject st = new JSONObject();
                 st.put("status", "ok");
-                st.put("version", "5.1.2");
+                st.put("version", "5.2.0");
                 st.put("model", Config.MODEL_NAME);
                 st.put("socket", Config.activeSocket);
                 st.put("routes", 0);
@@ -271,6 +271,9 @@ public class HttpServer {
         // 拼接 messages (system + history + user) - 支持多模态图片
         JSONArray imagesArr = new JSONArray();
         StringBuilder sb = new StringBuilder();
+        // 追踪最后一条消息, 供自动分块时保留末条提问原文
+        String lastRole = null, lastContent = null;
+        int lastStart = -1;
 
         if (messages != null) {
             for (int i = 0; i < messages.length(); i++) {
@@ -303,6 +306,9 @@ public class HttpServer {
                     cStr = m.optString("content", "");
                 }
                 if (cStr.isEmpty()) continue;
+                lastRole = role;
+                lastContent = cStr;
+                lastStart = sb.length();
                 if ("system".equals(role)) sb.append("系统设定：").append(cStr).append("\n");
                 else if ("assistant".equals(role)) sb.append(cStr).append("\n");
                 else if ("tool".equals(role)) sb.append("[工具结果] ").append(cStr).append(" [/工具结果]\n");
@@ -310,26 +316,41 @@ public class HttpServer {
             }
         }
 
-        // JSON 模式 + 参数映射
+        // JSON 模式 + 参数映射 (独立构建, 分块时只附加到最终提问)
         boolean jsonMode = false;
+        StringBuilder paramSb = new StringBuilder();
         JSONObject rf = reqObj.optJSONObject("response_format");
         if (rf != null && "json_object".equals(rf.optString("type", ""))) {
             jsonMode = true;
-            sb.append("严格要求：你必须只输出一个合法 JSON 对象。禁止使用 Markdown、列表符号、解释文字。示例格式：{\"key\":\"value\"}\n");
+            paramSb.append("严格要求：你必须只输出一个合法 JSON 对象。禁止使用 Markdown、列表符号、解释文字。示例格式：{\"key\":\"value\"}\n");
         }
         double temp = reqObj.optDouble("temperature", -1);
         if (temp >= 0) {
-            if (temp < 0.5) sb.append("回答要求：严谨、准确、简洁、事实导向，避免发散。\n");
-            else if (temp > 1.2) sb.append("回答要求：有创意、发散、生动，可以适当发挥。\n");
+            if (temp < 0.5) paramSb.append("回答要求：严谨、准确、简洁、事实导向，避免发散。\n");
+            else if (temp > 1.2) paramSb.append("回答要求：有创意、发散、生动，可以适当发挥。\n");
         }
         int maxTok = reqObj.optInt("max_tokens", -1);
         if (maxTok > 0) {
-            if (maxTok < 100) sb.append("回答要求：非常简短，一句话以内。\n");
-            else if (maxTok < 300) sb.append("回答要求：简洁，控制在几行内。\n");
-            else if (maxTok > 2000) sb.append("回答要求：详细完整，尽量展开论述，条理清晰。\n");
+            if (maxTok < 100) paramSb.append("回答要求：非常简短，一句话以内。\n");
+            else if (maxTok < 300) paramSb.append("回答要求：简洁，控制在几行内。\n");
+            else if (maxTok > 2000) paramSb.append("回答要求：详细完整，尽量展开论述，条理清晰。\n");
         }
 
         String text = sb.toString().trim();
+        String paramText = paramSb.toString().trim();
+
+        // 自动分块: 超过单次上限(~24.7KB)时滚动摘要, 客户端无感 (v5.2.0)
+        if (Config.AUTO_CHUNK && text.getBytes("UTF-8").length > QUERY_MAX_BYTES) {
+            try {
+                text = chunkedPrompt(text, lastRole, lastContent, lastStart, paramText);
+            } catch (Exception e) {
+                sendResponse(os, 500, OpenAiCompat.buildError(
+                    "auto-chunk failed: " + e.getMessage(), "server_error", "chunk_failed").toString());
+                return;
+            }
+        } else if (!paramText.isEmpty()) {
+            text = text + "\n" + paramText;
+        }
         JSONArray useImages = imagesArr.length() > 0 ? imagesArr : null;
         if (text.isEmpty()) {
             sendResponse(os, 400, OpenAiCompat.buildError(
@@ -380,6 +401,95 @@ public class HttpServer {
         }
         sendResponse(os, 200, OpenAiCompat.buildSyncResponse(model, reply,
                 AiClientHook.getAnnotations()).toString());
+    }
+
+    // 自动分块: 单次注入上限实测约 24.7KB, 预留余量
+    private static final int QUERY_MAX_BYTES = 20480;   // 超过即触发自动分块
+    private static final int CHUNK_TARGET_BYTES = 18000; // 每块目标 (留出提示词+前文摘要空间)
+    private static final int TAIL_MAX_BYTES = 4096;      // 末条 user 消息超过此值时并入摘要
+
+    /** 超长输入 → 滚动摘要链 → 最终提问 (服务端无会话记忆, 摘要链自携带状态) */
+    private String chunkedPrompt(String fullText, String lastRole, String lastContent,
+            int lastStart, String paramText) throws Exception {
+        boolean keepTail = "user".equals(lastRole) && lastContent != null
+                && lastContent.getBytes("UTF-8").length <= TAIL_MAX_BYTES;
+        String body = keepTail
+                ? fullText.substring(0, Math.min(lastStart, fullText.length())).trim()
+                : fullText;
+        if (body.isEmpty()) return fullText;
+
+        String summary = rollingSummarize(body);
+
+        StringBuilder p = new StringBuilder();
+        p.append("以下是长内容的滚动摘要：\n").append(summary).append("\n\n");
+        if (!paramText.isEmpty()) p.append(paramText).append("\n");
+        if (keepTail) {
+            p.append("用户最新提问：").append(lastContent);
+        } else {
+            p.append("请基于以上全部内容，回答用户最后提出的问题。");
+        }
+        return p.toString().trim();
+    }
+
+    /** 逐块请求小爱并滚动更新摘要 */
+    private String rollingSummarize(String body) throws Exception {
+        java.util.List<String> chunks = splitByBytes(body, CHUNK_TARGET_BYTES);
+        Logger.d("AutoChunk: " + body.getBytes("UTF-8").length
+                + " bytes -> " + chunks.size() + " chunks");
+        String summary = null;
+        for (int i = 0; i < chunks.size(); i++) {
+            StringBuilder p = new StringBuilder();
+            if (i == 0) {
+                p.append("你在接收一份长内容的分段传输，本段为第1段。请输出不超过600字的详细摘要，")
+                        .append("保留全部关键事实（名称、数字、日期、结论、用户提出的问题）：\n\n");
+            } else {
+                p.append("你在接收一份长内容的分段传输。前文摘要：\n").append(summary)
+                        .append("\n\n以下是第").append(i + 1)
+                        .append("段。请融合前文摘要与本段内容，输出不超过600字的更新摘要，")
+                        .append("必须保留之前所有关键事实：\n\n");
+            }
+            p.append(chunks.get(i));
+
+            CliClient.CliResult r = chatWithRetry(p.toString(), Config.API_CHAT_ID,
+                    Config.defaultAgentId, null, null);
+            if (r.error != null) {
+                throw new IllegalStateException("chunk " + (i + 1) + "/" + chunks.size()
+                        + " summarize failed: " + r.error);
+            }
+            String s = r.reply == null ? "" : r.reply.trim();
+            if (s.isEmpty()) {
+                throw new IllegalStateException("chunk " + (i + 1) + "/" + chunks.size()
+                        + " returned empty summary");
+            }
+            summary = s;
+        }
+        return summary;
+    }
+
+    /** 按 UTF-8 字节数切块, 优先在换行符处断开 (正确处理增补字符) */
+    private static java.util.List<String> splitByBytes(String text, int targetBytes) {
+        java.util.List<String> chunks = new java.util.ArrayList<>();
+        int n = text.length();
+        int start = 0;
+        while (start < n) {
+            int end = start, bytes = 0, lastNl = -1;
+            while (end < n) {
+                int cp = text.codePointAt(end);
+                int clen = cp <= 0x7F ? 1 : cp <= 0x7FF ? 2 : cp <= 0xFFFF ? 3 : 4;
+                if (bytes + clen > targetBytes) break;
+                bytes += clen;
+                end += Character.charCount(cp);
+                if (text.charAt(end - 1) == '\n') lastNl = end;
+            }
+            if (end >= n) {
+                chunks.add(text.substring(start));
+                break;
+            }
+            if (lastNl > start + targetBytes / 4) end = lastNl;
+            chunks.add(text.substring(start, end));
+            start = end;
+        }
+        return chunks;
     }
 
     private String readHttpLine(InputStream is) throws Exception {

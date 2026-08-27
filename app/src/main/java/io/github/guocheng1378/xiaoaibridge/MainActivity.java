@@ -50,7 +50,7 @@ public class MainActivity extends Activity {
     private static final int C_INPUT_RADIUS  = dp_static(12);
 
     private EditText etPort, etToken, etRateLimit;
-    private CheckBox cbReqLog, cbRetry, cbVerbose;
+    private CheckBox cbReqLog, cbRetry, cbVerbose, cbAutoChunk;
     private TextView tvStatus;
     private final Handler handler = new Handler(Looper.getMainLooper());
 ;
@@ -169,6 +169,12 @@ public class MainActivity extends Activity {
         cbRetry = styledCheckBox("AI 调用失败自动重试 1 次");
         cbRetry.setChecked(Config.RETRY);
         advCard.addView(cbRetry);
+
+        addSpacer(advCard, dp(6));
+
+        cbAutoChunk = styledCheckBox("超长输入自动分块+滚动摘要 (绕过 ~24KB 单次上限)");
+        cbAutoChunk.setChecked(Config.AUTO_CHUNK);
+        advCard.addView(cbAutoChunk);
 
         addSpacer(advCard, dp(6));
 
@@ -381,6 +387,7 @@ public class MainActivity extends Activity {
         Config.API_TOKEN = etToken.getText().toString().trim();
         Config.REQ_LOGGING = cbReqLog.isChecked();
         Config.RETRY = cbRetry.isChecked();
+        Config.AUTO_CHUNK = cbAutoChunk.isChecked();
         Config.VERBOSE = cbVerbose.isChecked();
         try { Config.RATE_LIMIT = Integer.parseInt(etRateLimit.getText().toString().trim()); }
         catch (Exception e) { Config.RATE_LIMIT = 0; }
@@ -391,6 +398,7 @@ public class MainActivity extends Activity {
         ed.putString("api_token", Config.API_TOKEN);
         ed.putBoolean("req_logging", Config.REQ_LOGGING);
         ed.putBoolean("retry", Config.RETRY);
+        ed.putBoolean("auto_chunk", Config.AUTO_CHUNK);
         ed.putBoolean("verbose", Config.VERBOSE);
         ed.putInt("rate_limit", Config.RATE_LIMIT);
         ed.apply();
