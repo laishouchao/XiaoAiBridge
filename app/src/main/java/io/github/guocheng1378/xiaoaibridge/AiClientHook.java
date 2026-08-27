@@ -295,6 +295,8 @@ public class AiClientHook {
     private static int lastFrames = 0;
     private static TextSink currentSink = null;
     private static boolean answerStarted = false;
+    // v5.2.1: 当前请求的 event id, 即其响应事件的 dialog_id; null 表示未启用会话门控
+    private static volatile String currentDialogId = null;
 
     private static String lastInstructionId = null;
 
@@ -314,6 +316,15 @@ public class AiClientHook {
             String name = header.optString("name", "");
             String namespace = header.optString("namespace", "");
             JSONObject payload = obj.optJSONObject("payload");
+
+            // v5.2.1: 会话门控 — 请求 event id 即响应 dialog_id, 只处理当前请求的事件。
+            // 防止上一轮迟到的 Dialog.Finish 释放新一轮闩锁 (滚动摘要背靠背请求必现空回复)。
+            // 置于去重之前, 避免旧会话事件污染 lastInstructionId 导致新事件被误去重。
+            String dialogId = header.optString("dialog_id", "");
+            if (currentDialogId != null && !dialogId.isEmpty()
+                    && !dialogId.equals(currentDialogId)) {
+                return;
+            }
 
             // v4.0: 去重 - InstructionWrapper 构造器和 ChannelListener.onInstruction 都会触发
             if (id.equals(lastInstructionId) && !name.isEmpty()) return;
@@ -371,6 +382,8 @@ public class AiClientHook {
             }
             if ("Suggestion".equals(namespace)) return;
             if ("System".equals(namespace)) return;
+            // v5.2.1: Settings 是连接握手事件 (ConnectionChallenge 等), 挑战码曾被兜底提取为正文
+            if ("Settings".equals(namespace)) return;
             if ("Dialog".equals(namespace)) return;
 
             if (payload != null) {
@@ -590,8 +603,17 @@ public class AiClientHook {
 
     /**
      * 发送文本查询并等待响应
+     * v5.2.1: 先构建事件取得 event id (即响应 dialog_id), 再与闩锁同锁原子绑定;
+     * 响应事件按 dialog_id 门控, 避免上一轮迟到的 Dialog.Finish 提前释放本轮闩锁
      */
     public static CliClient.CliResult chat(String text, String chatId, String agentId, CliClient.TextSink sink, Object images) {
+        Logger.d("AiClientHook: chat called, text=" + truncate(text, 100));
+
+        // 1. 先构建请求事件 (耗时操作, 在重置响应槽之前完成)
+        Object event = buildRequestEvent(text);
+        String eventId = extractEventId(event);
+
+        // 2. 重置响应状态; 闩锁与会话 id 同锁原子设置, 不留被旧事件击中的窗口
         synchronized (lock) {
             lastReply = null;
             lastError = null;
@@ -599,83 +621,29 @@ public class AiClientHook {
             answerStarted = false;
             lastAnnotations.clear();
             responseLatch = new CountDownLatch(1);
+            currentDialogId = eventId;
             currentSink = (sink != null) ? sink::onDelta : null;
         }
 
-        Logger.d("AiClientHook: chat called, text=" + truncate(text, 100));
-
-        // 方式1: 通过 Channel.postEvent 发送 (Nlp.Request via APIUtils.buildEvent)
-        if (capturedChannel != null) {
-            boolean connected = isChannelConnected();
-            Logger.d("AiClientHook: channel captured, connected=" + connected);
-
-            if (connected) {
-                boolean sent = sendViaPostEvent(text);
-                if (sent) {
-                    Logger.d("AiClientHook: sent via postEvent, waiting response...");
-                    boolean completed = awaitResponse();
-                    synchronized (lock) {
-                        String reply = lastReply != null ? lastReply : "";
-                        String error = lastError;
-                        if (!completed && error == null) {
-                            error = "TIMEOUT: no response within " + Config.READ_TIMEOUT + "ms";
-                        }
-                        Logger.d("AiClientHook: done, len=" + reply.length() + " frames=" + lastFrames + " error=" + error);
-                        return new CliClient.CliResult(reply, error, chatId, lastFrames);
-                    }
+        // 3. 发送: cr0.g.sendEvent 优先, f2.sendEvent 兜底
+        if (event != null && dispatchEvent(event)) {
+            Logger.d("AiClientHook: sent, dialog=" + eventId + ", waiting response...");
+            boolean completed = awaitResponse();
+            synchronized (lock) {
+                String reply = lastReply != null ? lastReply : "";
+                String error = lastError;
+                if (!completed && error == null) {
+                    error = "TIMEOUT: no response within " + Config.READ_TIMEOUT + "ms";
                 }
-            } else {
-                Logger.d("AiClientHook: channel not connected, trying send anyway...");
-                // 即使未连接也尝试发送, 可能发送时已连接
-                boolean sent = sendViaPostEvent(text);
-                if (sent) {
-                    Logger.d("AiClientHook: sent via postEvent (was disconnected), waiting...");
-                    boolean completed = awaitResponse();
-                    synchronized (lock) {
-                        String reply = lastReply != null ? lastReply : "";
-                        String error = lastError;
-                        if (!completed && error == null) error = "TIMEOUT";
-                        return new CliClient.CliResult(reply, error, chatId, lastFrames);
-                    }
-                }
-            }
-        } else {
-            Logger.d("AiClientHook: no channel captured, trying direct send...");
-            // sendViaPostEvent uses cr0.g.sendEvent(), doesn't need Channel instance
-            boolean sent = sendViaPostEvent(text);
-            if (sent) {
-                Logger.d("AiClientHook: sent via cr0.g.sendEvent (no channel), waiting...");
-                boolean completed = awaitResponse();
-                synchronized (lock) {
-                    String reply = lastReply != null ? lastReply : "";
-                    String error = lastError;
-                    if (!completed && error == null) error = "TIMEOUT";
-                    return new CliClient.CliResult(reply, error, chatId, lastFrames);
-                }
-            }
-
-            // Try searching for Channel instance as fallback
-            Logger.d("AiClientHook: direct send failed, trying Channel search...");
-            Object channel = findChannelInstance();
-            if (channel != null) {
-                capturedChannel = channel;
-                Logger.d("AiClientHook: found Channel via search: " + channel.getClass().getName());
-                sent = sendViaPostEvent(text);
-                if (sent) {
-                    Logger.d("AiClientHook: sent via postEvent (searched), waiting...");
-                    boolean completed = awaitResponse();
-                    synchronized (lock) {
-                        String reply = lastReply != null ? lastReply : "";
-                        String error = lastError;
-                        if (!completed && error == null) error = "TIMEOUT";
-                        return new CliClient.CliResult(reply, error, chatId, lastFrames);
-                    }
-                }
+                Logger.d("AiClientHook: done, dialog=" + eventId + " len=" + reply.length()
+                        + " frames=" + lastFrames + " error=" + error);
+                return new CliClient.CliResult(reply, error, chatId, lastFrames);
             }
         }
 
-        // 方式2: Intent 回退
-        Logger.d("AiClientHook: Channel send failed, trying Intent fallback");
+        // 4. Intent 回退 (响应无法与 event id 关联, 关闭会话门控)
+        synchronized (lock) { currentDialogId = null; }
+        Logger.d("AiClientHook: event send failed, trying Intent fallback");
         trySendViaIntent(text);
         boolean completed = awaitResponse();
         synchronized (lock) {
@@ -684,6 +652,62 @@ public class AiClientHook {
             if (!completed && error == null) error = "TIMEOUT: Intent fallback";
             return new CliClient.CliResult(reply, error, chatId, lastFrames);
         }
+    }
+
+    /** v5.2.1: 构建 Nlp.RequestLargeLanguageModelContent 事件 (自 sendViaPostEvent 拆出) */
+    private static Object buildRequestEvent(String text) {
+        try {
+            ClassLoader cl = getHostClassLoader();
+
+            Object request = createLlmRequest(text, cl);
+            if (request == null) {
+                Logger.d("AiClientHook: failed to create RequestLargeLanguageModelContent");
+                return null;
+            }
+
+            Object event = buildEventViaApiUtils(request, cl);
+            if (event == null) {
+                event = buildEventManual("Nlp", "RequestLargeLanguageModelContent", request, cl);
+            }
+            if (event == null) {
+                Logger.d("AiClientHook: failed to build Event");
+                return null;
+            }
+            Logger.d("AiClientHook: LLM Event ready, toString=" + truncate(event.toString(), 500));
+            return event;
+        } catch (Exception e) {
+            Logger.e("AiClientHook: buildRequestEvent failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** v5.2.1: 分发事件, cr0.g.sendEvent 优先, f2.sendEvent 兜底 (自 sendViaPostEvent 拆出) */
+    private static boolean dispatchEvent(Object event) {
+        ClassLoader cl = getHostClassLoader();
+        if (sendViaCr0g(event, cl)) {
+            Logger.d("AiClientHook: sent via cr0.g.sendEvent!");
+            return true;
+        }
+        if (sendViaF2(event, cl)) {
+            Logger.d("AiClientHook: sent via f2.sendEvent!");
+            return true;
+        }
+        Logger.d("AiClientHook: cr0.g and f2 sendEvent failed");
+        return false;
+    }
+
+    /** v5.2.1: 从事件 toString 提取 header.id — 即响应事件的 dialog_id */
+    private static String extractEventId(Object event) {
+        if (event == null) return null;
+        try {
+            String s = event.toString();
+            int i = s.indexOf("\"id\":\"");
+            if (i < 0) return null;
+            int start = i + 6;
+            int end = s.indexOf('"', start);
+            if (end > start) return s.substring(start, end);
+        } catch (Exception ignored) {}
+        return null;
     }
 
     /**
