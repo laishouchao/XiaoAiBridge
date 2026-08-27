@@ -323,6 +323,7 @@ public class AiClientHook {
             String dialogId = header.optString("dialog_id", "");
             if (currentDialogId != null && !dialogId.isEmpty()
                     && !dialogId.equals(currentDialogId)) {
+                Logger.d("AiClientHook: session-gate REJECTED event=" + name + " dialog=" + dialogId + " current=" + currentDialogId);
                 return;
             }
 
@@ -555,19 +556,35 @@ public class AiClientHook {
             if (currentSink != null && text != null) {
                 currentSink.onDelta(text);
             }
+            Logger.d("AiClientHook: onResponse frames=" + lastFrames + " replyLen=" + (lastReply != null ? lastReply.length() : 0));
         }
     }
 
     public static void onError(String error) {
         synchronized (lock) {
             lastError = error;
+            Logger.d("AiClientHook: onError: " + error + " latch=" + (responseLatch != null));
             if (responseLatch != null) responseLatch.countDown();
         }
     }
 
+    /**
+     * v5.2.2: 仅在 answerStarted=true 时才释放闩锁。
+     * 防止上一轮延迟到达的 Dialog.Finish (可能缺少 dialog_id, 绕过会话门控)
+     * 在新一轮 StartStream 到达之前提前释放闩锁, 导致 lastReply 为空。
+     */
     public static void onEnd() {
         synchronized (lock) {
-            if (responseLatch != null) responseLatch.countDown();
+            if (responseLatch == null) {
+                Logger.d("AiClientHook: onEnd ignored, no latch");
+                return;
+            }
+            if (!answerStarted) {
+                Logger.d("AiClientHook: onEnd ignored, answerStarted=false (stale finish?)");
+                return;
+            }
+            Logger.d("AiClientHook: onEnd → countDown, replyLen=" + (lastReply != null ? lastReply.length() : 0));
+            responseLatch.countDown();
         }
     }
 
@@ -629,6 +646,7 @@ public class AiClientHook {
         if (event != null && dispatchEvent(event)) {
             Logger.d("AiClientHook: sent, dialog=" + eventId + ", waiting response...");
             boolean completed = awaitResponse();
+            Logger.d("AiClientHook: awaitResponse returned " + completed + ", dialog=" + eventId);
             synchronized (lock) {
                 String reply = lastReply != null ? lastReply : "";
                 String error = lastError;
@@ -636,7 +654,7 @@ public class AiClientHook {
                     error = "TIMEOUT: no response within " + Config.READ_TIMEOUT + "ms";
                 }
                 Logger.d("AiClientHook: done, dialog=" + eventId + " len=" + reply.length()
-                        + " frames=" + lastFrames + " error=" + error);
+                        + " frames=" + lastFrames + " completed=" + completed + " error=" + error);
                 return new CliClient.CliResult(reply, error, chatId, lastFrames);
             }
         }
