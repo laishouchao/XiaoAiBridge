@@ -194,7 +194,7 @@ public class MainActivity extends Activity {
         tvHint.setText("保存后重启超级小爱使配置生效。\n\n"
                 + "接入方式\n"
                 + "Base URL: http://127.0.0.1:" + Config.HTTP_PORT + "/v1\n"
-                + "Model: voiceassist.main\n\n"
+                + "Model: " + Config.MODEL_NAME + "\n\n"
                 + "端点\n"
                 + "/v1/chat/completions  /v1/chat\n"
                 + "/v1/models  /health\n"

@@ -149,14 +149,14 @@ public class HttpServer {
             } else if ("/".equals(path)) {
                 JSONObject r = new JSONObject();
                 r.put("name", "XiaoAiApiBridge");
-                r.put("version", "5.1.0");
+                r.put("version", "5.1.1");
                 r.put("docs", "/openapi.json");
                 r.put("models", "/v1/models");
                 sendResponse(os, 200, r.toString());
             } else if ("/health".equals(path)) {
                 JSONObject r = new JSONObject();
                 r.put("status", "ok");
-                r.put("agent", Config.defaultAgentId);
+                r.put("model", Config.MODEL_NAME);
                 r.put("socket", Config.activeSocket);
                 sendResponse(os, 200, r.toString());
             } else if ("/openapi.json".equals(path)) {
@@ -167,9 +167,8 @@ public class HttpServer {
             } else if ("/v1/admin/status".equals(path) && "GET".equals(method)) {
                 JSONObject st = new JSONObject();
                 st.put("status", "ok");
-                st.put("version", "5.1.0");
-                st.put("agent", Config.defaultAgentId);
-                st.put("agentName", Config.agentName);
+                st.put("version", "5.1.1");
+                st.put("model", Config.MODEL_NAME);
                 st.put("socket", Config.activeSocket);
                 st.put("routes", 0);
                 sendResponse(os, 200, st.toString());
@@ -191,7 +190,7 @@ public class HttpServer {
                 resp.put("ok", true);
                 resp.put("chat_id", chatId);
                 resp.put("cleared", "local");
-                resp.put("note", "voiceassist 模式: 会话由超级小爱管理");
+                resp.put("note", "会话由超级小爱 App 自身管理");
                 sendResponse(os, 200, resp.toString());
             } else if ("/v1/admin/logs".equals(path) && "GET".equals(method)) {
                 JSONObject lr = new JSONObject();
@@ -265,24 +264,13 @@ public class HttpServer {
     private void handleChatCompletions(OutputStream os, String body) throws Exception {
         JSONObject reqObj = new JSONObject(body);
         boolean stream = reqObj.optBoolean("stream", false);
-        String model = reqObj.optString("model", "miclaw");
+        String model = reqObj.optString("model", Config.MODEL_NAME);
+        if (model == null || model.isEmpty()) model = Config.MODEL_NAME;
         JSONArray messages = reqObj.optJSONArray("messages");
 
         // 拼接 messages (system + history + user) - 支持多模态图片
         JSONArray imagesArr = new JSONArray();
         StringBuilder sb = new StringBuilder();
-
-        boolean isVoiceAssist = model != null && model.startsWith("voiceassist.");
-        boolean hasSystem = false;
-        if (messages != null) {
-            for (int i = 0; i < messages.length(); i++) {
-                JSONObject m = messages.optJSONObject(i);
-                if (m != null && "system".equals(m.optString("role", ""))) { hasSystem = true; break; }
-            }
-        }
-        if (!hasSystem && !isVoiceAssist) {
-            sb.append("系统设定：你是通用 AI 助手，具备文件处理、代码执行、联网搜索、数据分析等能力。回答问题要完整专业、条理清晰；简单问题直接回答，不要调用工具；涉及文件、代码、实时数据、设备操作时才使用工具。\n\n");
-        }
 
         if (messages != null) {
             for (int i = 0; i < messages.length(); i++) {
@@ -316,9 +304,9 @@ public class HttpServer {
                 }
                 if (cStr.isEmpty()) continue;
                 if ("system".equals(role)) sb.append("系统设定：").append(cStr).append("\n");
-                else if ("assistant".equals(role)) sb.append(isVoiceAssist ? "" : "助手: ").append(cStr).append("\n");
+                else if ("assistant".equals(role)) sb.append(cStr).append("\n");
                 else if ("tool".equals(role)) sb.append("[工具结果] ").append(cStr).append(" [/工具结果]\n");
-                else sb.append(isVoiceAssist ? "" : "用户: ").append(cStr).append("\n");
+                else sb.append(cStr).append("\n");
             }
         }
 
@@ -349,14 +337,8 @@ public class HttpServer {
             return;
         }
 
-        // model -> agentId (未知模型用默认)
-        String agentId = model;
-        if (agentId == null || agentId.isEmpty()
-            || "miclaw".equals(agentId) || "gpt-3.5-turbo".equals(agentId)
-            || "gpt-4".equals(agentId) || "gpt-4o".equals(agentId)
-            || "gpt-4o-mini".equals(agentId)) {
-            agentId = Config.defaultAgentId;
-        }
+        // model 参数仅为名称, 底层始终为同一超级小爱引擎 (agentId 在 Hook 层未使用)
+        String agentId = Config.defaultAgentId;
 
         if (stream) {
             // SSE 流式

@@ -283,9 +283,7 @@ public class CliClient {
                 if (arr != null && arr.length() > 0) {
                     JSONObject a = arr.getJSONObject(0);
                     Config.defaultAgentId = a.optString("id", "osbot.main");
-                    Config.agentName = a.optString("name", "XiaoAi");
-                    Logger.d("Agent: " + Config.defaultAgentId
-                        + " (" + Config.agentName + ")");
+                    Logger.d("Agent: " + Config.defaultAgentId);
                 }
             }
         } catch (Exception e) {

@@ -7,9 +7,9 @@
 通过 Hook 超级小爱内部的 `cr0.g`（会话管理器），使用 `Nlp.RequestLargeLanguageModelContent` 将文本直接注入 NLP 管线，绕过语音识别（ASR），响应通过 `Template.ToastStream` 流式提取。
 
 ```
-用户请求 → HTTP Server (127.0.0.1:8787)
+用户请求 → HTTP Server (0.0.0.0:8787)
          → cr0.g.getInstance().sendEvent(RequestLargeLanguageModelContent)
-         → 小爱 NLP 引擎
+         → 超级小爱 NLP 引擎 (唯一, 不随 model 参数切换)
          → Template.ToastStream 流式响应
          → OpenAI 兼容 JSON / SSE 返回
 ```
@@ -17,8 +17,8 @@
 ## 功能
 
 - **OpenAI 兼容**：`POST /v1/chat/completions`（支持流式 SSE + 非流式）
-- **多模型**：`voiceassist.main` / `voiceassist.chat` / `voiceassist.nlp` / `voiceassist.skill` / `xiaomi.ai`
-- **多轮会话**：`user` 字段控制会话上下文
+- **单一模型**：`model` 字段只有一个值 `XiaoAi`（底层为超级小爱 NLP 引擎，见下方"模型"章节）
+- **多轮对话**：模块无状态，由客户端携带完整 messages 历史实现
 - **管理**：`GET /v1/models` / `GET /health` / 配置热重载
 - **零外部依赖**：全部走本地超级小爱引擎，无需 API Key
 
@@ -38,7 +38,7 @@ http://127.0.0.1:8787/v1
 # 对话
 curl -X POST http://127.0.0.1:8787/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"voiceassist.main","messages":[{"role":"user","content":"你好"}]}'
+  -d '{"model":"XiaoAi","messages":[{"role":"user","content":"你好"}]}'
 
 # 模型列表
 curl http://127.0.0.1:8787/v1/models
@@ -49,9 +49,9 @@ curl http://127.0.0.1:8787/v1/models
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/v1/chat/completions` | POST | OpenAI 对话（流式/非流式） |
-| `/v1/chat` | POST | 简化对话（text → reply） |
-| `/v1/chat/reset` | POST | 重置会话 |
-| `/v1/models` | GET | 可用模型列表 |
+| `/v1/chat` | POST | 简化对话（text → reply；`chatId`/`agentId` 参数未透传，仅为占位） |
+| `/v1/chat/reset` | POST | 空操作（会话由超级小爱管理，无本地会话可重置） |
+| `/v1/models` | GET | 模型列表（仅一个 `XiaoAi`） |
 | `/v1/tools` | GET | 工具信息 |
 | `/health` | GET | 健康检查 |
 | `/v1/admin/status` | GET | 服务状态 |
@@ -61,21 +61,24 @@ curl http://127.0.0.1:8787/v1/models
 
 ## 模型
 
-超级小爱底层使用小米自研大模型。早期版本搭载 **MiLM-6B**（64 亿参数预训练语言模型），当前超级小爱已升级至 **MiMo 系列**大模型。
+> **只有一个模型：`XiaoAi`。**
+>
+> `model` 参数不会透传给超级小爱（Hook 层的 `agentId` 变量未被使用），它仅作为 OpenAI 协议中的名称占位，方便客户端配置。传入任何其他字符串（如 `gpt-4o`）也不会报错，行为与 `XiaoAi` 完全相同，响应中原样回显客户端传入的名称。
 
-| 模型名 | 说明 |
-|--------|------|
-| `voiceassist.main` | 默认超级小爱（主对话引擎） |
-| `voiceassist.chat` | 聊天模式 |
-| `voiceassist.nlp` | NLP 语义理解 |
-| `voiceassist.skill` | 技能服务 |
-| `xiaomi.ai` | 小米 AI 通用引擎 |
+| 项目 | 说明 |
+|------|------|
+| 唯一模型名 | `XiaoAi` |
+| 底层引擎 | 超级小爱 NLP 管线（由小爱 App 自身决定，模块不可选） |
+| `model` 参数作用 | 仅占位回显，不影响任何行为 |
+| 请求拼接方式 | system 消息以 `系统设定：` 前缀注入，user/assistant 消息按原文裸拼接直发 |
 
-### 模型参数
+超级小爱底层使用小米自研大模型。早期版本搭载 **MiLM-6B**（64 亿参数预训练语言模型），当前超级小爱已升级至 **MiMo 系列**大模型。模块无法选择后端模型——实际使用哪个模型由超级小爱 App 自身决定。
+
+### 引擎参数（实测）
 
 | 指标 | 数值 | 说明 |
 |------|------|------|
-| 参数量 | ~6.4B | 小米 MiLM-6B 初始模型 |
+| 参数量 | ~6.4B | 小米 MiLM-6B 初始模型（后端，模块不可选） |
 | 架构 | GPT-like | 预训练语言模型 |
 | 上下文窗口 (API 层) | ~24KB | 本模块 HTTP API 实测字节上限 |
 | 上下文窗口 (中文) | ~8,200 字符 | UTF-8 编码下 3 字节/字符 |
@@ -93,7 +96,7 @@ curl http://127.0.0.1:8787/v1/models
 
 | 参数 | 支持度 | 类型 | 生效方式 |
 |------|--------|------|----------|
-| `model` | ✅ 完全支持 | String | 映射为 agentId，未知模型回退默认 |
+| `model` | ⚠️ 仅占位 | String | 不透传给小爱，任何值均同 `XiaoAi`，响应原样回显 |
 | `messages` | ✅ 完全支持 | Array | 拼接为文本发送给超级小爱 |
 | `stream` | ✅ 完全支持 | Boolean | `true` 时返回 SSE 流式输出 |
 | `response_format` | ✅ 支持 | Object | `{"type":"json_object"}` 时注入 JSON 指令 |
@@ -130,9 +133,9 @@ curl http://127.0.0.1:8787/v1/models
 
 ### 多轮对话与 System Prompt
 
-- **多轮对话**: 将多条 messages 按顺序传入，模块自动拼接为上下文文本
-- **System Prompt**: 以 `"系统设定："` 前缀注入，超级小爱会参考角色设定
-- **voiceassist.main 特殊处理**: 该模型跳过 system 默认人设注入，直接发送用户消息
+- **多轮对话**: 模块无状态，客户端每次请求需携带完整 messages 历史（拼接后总字节 ≤ ~24KB）
+- **System Prompt**: 以 `"系统设定："` 前缀注入，随拼接文本一起发送
+- **user/assistant 消息**: 按原文裸拼接直发，不添加 `用户:`/`助手:` 角色前缀
 - **JSON 模式**: `response_format: {"type": "json_object"}` 时注入指令要求 AI 只输出 JSON
 
 ## 已知限制
@@ -143,6 +146,7 @@ curl http://127.0.0.1:8787/v1/models
 4. **token 计数始终为 0** — `usage` 字段不反映真实 token 数
 5. **响应内容噪声** — 回复开头可能包含随机字符串（桥接层噪声）
 6. **超限请求耗时 ~25s** — 超时等待而非立即拒绝
+7. **模型不可选** — 仅一个 `XiaoAi` 模型，`model` 参数为占位，无法切换后端引擎
 
 ## 配置
 
@@ -166,11 +170,12 @@ curl http://127.0.0.1:8787/v1/models
 git clone https://github.com/laishouchao/XiaoAiBridge
 # Android Studio 打开，编译即可
 # 推送 tag 触发 GitHub Actions 自动构建 Release
-git tag v5.1.0 && git push origin v5.1.0
+git tag v5.1.1 && git push origin v5.1.1
 ```
 
 ## 版本历史
 
+- **v5.1.1** (2026-08-27): 模型列表精简为单一 `XiaoAi`，移除全部别名与前缀分支；文档修正至真实情况——`model`/`chatId` 参数不透传、`/v1/chat/reset` 为空操作
 - **v5.1.0** (2026-08-18): 精简重构，移除 LLM 代理/exec/root 管理，仅保留核心 AI→API 功能
 - **v5.0.1** (2026-08-18): 修复 root 状态检测，UI 文案统一为"超级小爱"
 - **v5.0.0** (2026-08-18): Material Design 卡片式 UI 重构，GitHub Actions CI/CD

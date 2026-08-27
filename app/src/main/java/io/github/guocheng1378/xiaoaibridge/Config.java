@@ -25,9 +25,9 @@ public class Config {
     public static boolean VERBOSE = false;      // Verbose 调试日志
 
     // 运行时状态
+    public static final String MODEL_NAME = "XiaoAi";
     public static String activeSocket = "voiceassist-internal";
     public static String defaultAgentId = "voiceassist.main";
-    public static String agentName = "XiaoAi";
 
     /** 从设置读取配置 (模块 UI 保存后, 宿主进程启动时调用) */
     public static void loadFrom(Context context) {

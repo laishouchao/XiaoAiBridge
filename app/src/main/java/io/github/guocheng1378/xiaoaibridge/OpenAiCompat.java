@@ -8,26 +8,6 @@ import org.json.JSONObject;
  */
 public class OpenAiCompat {
 
-    /** 从 OpenAI messages 数组提取 text（拼接 system + user） */
-    public static String extractText(JSONArray messages) {
-        if (messages == null) return "";
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < messages.length(); i++) {
-            JSONObject m = messages.optJSONObject(i);
-            if (m == null) continue;
-            String role = m.optString("role", "");
-            String content = m.optString("content", "");
-            if ("system".equals(role)) {
-                sb.append("[系统指令] ").append(content).append(" [/系统指令]\n");
-            } else if ("user".equals(role)) {
-                sb.append("用户: ").append(content).append("\n");
-            } else if ("assistant".equals(role)) {
-                sb.append("助手: ").append(content).append("\n");
-            }
-        }
-        return sb.toString().trim();
-    }
-
     /** 构建非流式 OpenAI 响应 */
     public static JSONObject buildSyncResponse(String model, String content) {
         try {
@@ -92,30 +72,20 @@ public class OpenAiCompat {
         }
     }
 
-    /** 构建模型列表 */
+    /** 构建模型列表 (仅一个模型 XiaoAi, 底层为超级小爱 NLP 引擎, model 参数不透传) */
     public static JSONObject buildModelList() {
         try {
             JSONObject resp = new JSONObject();
             resp.put("object", "list");
             JSONArray data = new JSONArray();
 
-            String[][] models = {
-                {Config.defaultAgentId, Config.agentName},
-                {"voiceassist.nlp", "NLP语义理解"},
-                {"voiceassist.chat", "AI对话"},
-                {"voiceassist.skill", "技能服务"},
-                {"xiaomi.ai", "小米AI引擎"}
-            };
-
-            for (String[] m : models) {
-                JSONObject model = new JSONObject();
-                model.put("id", m[0]);
-                model.put("object", "model");
-                model.put("created", System.currentTimeMillis() / 1000);
-                model.put("owned_by", "xiaoaibridge");
-                model.put("description", m[1]);
-                data.put(model);
-            }
+            JSONObject model = new JSONObject();
+            model.put("id", Config.MODEL_NAME);
+            model.put("object", "model");
+            model.put("created", System.currentTimeMillis() / 1000);
+            model.put("owned_by", "xiaoaibridge");
+            model.put("description", "超级小爱对话引擎 (model 参数仅为名称, 不透传给小爱)");
+            data.put(model);
 
             resp.put("data", data);
             return resp;
@@ -149,8 +119,8 @@ public class OpenAiCompat {
             JSONObject doc = new JSONObject();
             doc.put("openapi", "3.0.0");
             JSONObject info = new JSONObject();
-            info.put("title", "MiclawApiBridge");
-            info.put("version", "1.1.0");
+            info.put("title", "XiaoAiBridge");
+            info.put("version", "5.1.1");
             info.put("description", "把小米超级小爱(com.miui.voiceassist)的 AI 能力暴露为 OpenAI 兼容 API");
             doc.put("info", info);
 
