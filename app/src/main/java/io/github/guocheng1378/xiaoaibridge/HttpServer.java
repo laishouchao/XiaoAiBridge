@@ -268,6 +268,11 @@ public class HttpServer {
         final String model = (modelRaw == null || modelRaw.isEmpty()) ? Config.MODEL_NAME : modelRaw;
         JSONArray messages = reqObj.optJSONArray("messages");
 
+        // v5.3.0: 解析 tools / tool_choice
+        JSONArray tools = reqObj.optJSONArray("tools");
+        Object toolChoice = reqObj.has("tool_choice") ? reqObj.opt("tool_choice") : null;
+        boolean hasTools = tools != null && tools.length() > 0;
+
         // 拼接 messages (system + history + user) - 支持多模态图片
         JSONArray imagesArr = new JSONArray();
         StringBuilder sb = new StringBuilder();
@@ -305,13 +310,21 @@ public class HttpServer {
                 } else {
                     cStr = m.optString("content", "");
                 }
-                if (cStr.isEmpty()) continue;
+                if (cStr.isEmpty() && !"tool".equals(role)) continue;
                 lastRole = role;
                 lastContent = cStr;
                 lastStart = sb.length();
                 if ("system".equals(role)) sb.append("系统设定：").append(cStr).append("\n");
                 else if ("assistant".equals(role)) sb.append(cStr).append("\n");
-                else if ("tool".equals(role)) sb.append("[工具结果] ").append(cStr).append(" [/工具结果]\n");
+                else if ("tool".equals(role)) {
+                    // v5.3.0: 增强 tool 消息格式, 包含函数名
+                    String toolName = m.optString("name", "");
+                    String tcId = m.optString("tool_call_id", "");
+                    sb.append("[工具调用结果]");
+                    if (!toolName.isEmpty()) sb.append(" 函数名: ").append(toolName);
+                    if (!tcId.isEmpty()) sb.append(" (id: ").append(tcId).append(")");
+                    sb.append("\n结果: ").append(cStr).append("\n[/工具调用结果]\n");
+                }
                 else sb.append(cStr).append("\n");
             }
         }
@@ -334,6 +347,11 @@ public class HttpServer {
             if (maxTok < 100) paramSb.append("回答要求：非常简短，一句话以内。\n");
             else if (maxTok < 300) paramSb.append("回答要求：简洁，控制在几行内。\n");
             else if (maxTok > 2000) paramSb.append("回答要求：详细完整，尽量展开论述，条理清晰。\n");
+        }
+        // v5.3.0: 注入 tools prompt
+        if (hasTools) {
+            String toolsPrompt = OpenAiCompat.buildToolsPrompt(tools, toolChoice);
+            if (toolsPrompt != null) paramSb.append(toolsPrompt).append("\n");
         }
 
         String text = sb.toString().trim();
@@ -371,12 +389,28 @@ public class HttpServer {
             os.write(sbHeader.toString().getBytes("UTF-8"));
             os.flush();
 
+            // v5.3.0: 流式模式下累积完整回复, 结束后检测 tool_calls
+            StringBuilder streamAccum = hasTools ? new StringBuilder() : null;
+
             CliClient.CliResult r = chatWithRetry(text, Config.API_CHAT_ID, agentId, t -> {
                 try {
+                    if (streamAccum != null) streamAccum.append(t);
                     os.write(OpenAiCompat.buildStreamChunk(model, t, null).getBytes("UTF-8"));
                     os.flush();
                 } catch (Exception ignored) {}
             }, useImages);
+
+            // v5.3.0: 流式结束后检测 tool_calls
+            if (streamAccum != null) {
+                String fullReply = streamAccum.toString();
+                java.util.List<org.json.JSONObject> toolCalls = OpenAiCompat.parseToolCalls(fullReply);
+                if (toolCalls != null) {
+                    os.write(OpenAiCompat.buildToolCallStreamChunk(model, toolCalls).getBytes("UTF-8"));
+                    os.write("data: [DONE]\n\n".getBytes("UTF-8"));
+                    os.flush();
+                    return;
+                }
+            }
 
             java.util.List<org.json.JSONObject> anns = AiClientHook.getAnnotations();
             if (!anns.isEmpty()) {
@@ -395,6 +429,18 @@ public class HttpServer {
             return;
         }
         String reply = r.reply;
+
+        // v5.3.0: 非流式检测 tool_calls
+        if (hasTools) {
+            java.util.List<org.json.JSONObject> toolCalls = OpenAiCompat.parseToolCalls(reply);
+            if (toolCalls != null) {
+                String content = OpenAiCompat.extractContentWithoutToolCalls(reply);
+                sendResponse(os, 200, OpenAiCompat.buildToolCallResponse(model,
+                        toolCalls, content).toString());
+                return;
+            }
+        }
+
         if (jsonMode) {
             String j = OpenAiCompat.extractJson(reply);
             reply = j != null ? j : "{}";
