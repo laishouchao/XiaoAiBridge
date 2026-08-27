@@ -468,7 +468,17 @@ public class HttpServer {
 
         StringBuilder p = new StringBuilder();
         p.append("以下是长内容的滚动摘要：\n").append(summary).append("\n\n");
-        if (!paramText.isEmpty()) p.append(paramText).append("\n");
+        // v5.3.1: 限制最终提示大小, 避免 paramText (tools prompt 等) 导致内容过长
+        if (!paramText.isEmpty()) {
+            int currentBytes = p.toString().getBytes("UTF-8").length;
+            int paramBytes = paramText.getBytes("UTF-8").length;
+            if (currentBytes + paramBytes < QUERY_MAX_BYTES) {
+                p.append(paramText).append("\n");
+            } else {
+                Logger.d("AutoChunk: paramText skipped, final prompt too large ("
+                        + currentBytes + " + " + paramBytes + " bytes)");
+            }
+        }
         if (keepTail) {
             p.append("用户最新提问：").append(lastContent);
         } else {
