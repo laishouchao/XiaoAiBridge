@@ -149,7 +149,7 @@ public class HttpServer {
             } else if ("/".equals(path)) {
                 JSONObject r = new JSONObject();
                 r.put("name", "XiaoAiApiBridge");
-                r.put("version", "5.1.1");
+                r.put("version", "5.1.2");
                 r.put("docs", "/openapi.json");
                 r.put("models", "/v1/models");
                 sendResponse(os, 200, r.toString());
@@ -167,7 +167,7 @@ public class HttpServer {
             } else if ("/v1/admin/status".equals(path) && "GET".equals(method)) {
                 JSONObject st = new JSONObject();
                 st.put("status", "ok");
-                st.put("version", "5.1.1");
+                st.put("version", "5.1.2");
                 st.put("model", Config.MODEL_NAME);
                 st.put("socket", Config.activeSocket);
                 st.put("routes", 0);
@@ -357,6 +357,10 @@ public class HttpServer {
                 } catch (Exception ignored) {}
             }, useImages);
 
+            java.util.List<org.json.JSONObject> anns = AiClientHook.getAnnotations();
+            if (!anns.isEmpty()) {
+                os.write(OpenAiCompat.buildStreamAnnotationsChunk(model, anns).getBytes("UTF-8"));
+            }
             os.write(OpenAiCompat.buildStreamChunk(model, null, "stop").getBytes("UTF-8"));
             os.write("data: [DONE]\n\n".getBytes("UTF-8"));
             os.flush();
@@ -374,7 +378,8 @@ public class HttpServer {
             String j = OpenAiCompat.extractJson(reply);
             reply = j != null ? j : "{}";
         }
-        sendResponse(os, 200, OpenAiCompat.buildSyncResponse(model, reply).toString());
+        sendResponse(os, 200, OpenAiCompat.buildSyncResponse(model, reply,
+                AiClientHook.getAnnotations()).toString());
     }
 
     private String readHttpLine(InputStream is) throws Exception {

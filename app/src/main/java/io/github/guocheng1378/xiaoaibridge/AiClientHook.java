@@ -298,6 +298,10 @@ public class AiClientHook {
 
     private static String lastInstructionId = null;
 
+    // 本轮回复的引用文献 (Template.LLMReferenceInfo → OpenAI url_citation)
+    private static final java.util.List<org.json.JSONObject> lastAnnotations =
+            new java.util.ArrayList<>();
+
     // === 响应处理 ===
 
     public static void onInstructionJson(String json) {
@@ -357,6 +361,11 @@ public class AiClientHook {
                 if ("LLMLoadingCard".equals(name)) return;
                 if ("FrontendPage".equals(name)) return;
                 if ("ResultOperationInfo".equals(name)) return;
+                // LLMReferenceInfo 是引用来源, 转成 annotations 而非正文
+                if ("LLMReferenceInfo".equals(name)) {
+                    collectReferenceInfo(payload);
+                    return;
+                }
                 // ToastStream 有 markdown_text (真实回复)
                 if ("Query".equals(name)) return; // 服务端回声, 不是回复
             }
@@ -470,6 +479,59 @@ public class AiClientHook {
         return null;
     }
 
+    /** Template.LLMReferenceInfo → OpenAI annotations (url_citation), 按 URL 去重 */
+    private static void collectReferenceInfo(org.json.JSONObject payload) {
+        try {
+            if (payload == null) return;
+            org.json.JSONArray items = payload.optJSONArray("items");
+            if (items == null) return;
+            synchronized (lock) {
+                for (int i = 0; i < items.length(); i++) {
+                    org.json.JSONObject item = items.optJSONObject(i);
+                    if (item == null) continue;
+
+                    String title = item.optString("content", "");
+                    String url = "";
+                    org.json.JSONObject icon = item.optJSONObject("skill_icon");
+                    if (icon != null) {
+                        if (title.isEmpty()) title = icon.optString("description", "");
+                        // launcher.url 是引用页面的真实链接; sources 是图标图床
+                        org.json.JSONObject launcher = icon.optJSONObject("launcher");
+                        if (launcher != null) url = launcher.optString("url", "");
+                    }
+                    if (url.isEmpty()) url = item.optString("url", "");
+                    if (title.isEmpty() || url.isEmpty()) continue;
+
+                    boolean dup = false;
+                    for (org.json.JSONObject a : lastAnnotations) {
+                        org.json.JSONObject uc = a.optJSONObject("url_citation");
+                        if (uc != null && url.equals(uc.optString("url", ""))) { dup = true; break; }
+                    }
+                    if (dup) continue;
+
+                    org.json.JSONObject uc = new org.json.JSONObject();
+                    uc.put("start_index", 0);
+                    uc.put("end_index", 0);
+                    uc.put("title", title);
+                    uc.put("url", url);
+                    org.json.JSONObject ann = new org.json.JSONObject();
+                    ann.put("type", "url_citation");
+                    ann.put("url_citation", uc);
+                    lastAnnotations.add(ann);
+                }
+            }
+        } catch (Exception e) {
+            Logger.e("collectReferenceInfo: " + e.getMessage());
+        }
+    }
+
+    /** 获取本轮回复的引用列表 (快照) */
+    public static java.util.List<org.json.JSONObject> getAnnotations() {
+        synchronized (lock) {
+            return new java.util.ArrayList<>(lastAnnotations);
+        }
+    }
+
     // === 响应回调 ===
 
     public static void onResponse(String text, boolean isStreaming) {
@@ -535,6 +597,7 @@ public class AiClientHook {
             lastError = null;
             lastFrames = 0;
             answerStarted = false;
+            lastAnnotations.clear();
             responseLatch = new CountDownLatch(1);
             currentSink = (sink != null) ? sink::onDelta : null;
         }

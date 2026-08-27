@@ -8,8 +8,9 @@ import org.json.JSONObject;
  */
 public class OpenAiCompat {
 
-    /** 构建非流式 OpenAI 响应 */
-    public static JSONObject buildSyncResponse(String model, String content) {
+    /** 构建非流式 OpenAI 响应 (annotations: 引用文献, 可为 null) */
+    public static JSONObject buildSyncResponse(String model, String content,
+            java.util.List<JSONObject> annotations) {
         try {
             JSONObject resp = new JSONObject();
             resp.put("id", "chatcmpl-" + System.currentTimeMillis());
@@ -24,6 +25,11 @@ public class OpenAiCompat {
             JSONObject msg = new JSONObject();
             msg.put("role", "assistant");
             msg.put("content", content == null ? "" : content);
+            if (annotations != null && !annotations.isEmpty()) {
+                JSONArray anns = new JSONArray();
+                for (JSONObject a : annotations) anns.put(a);
+                msg.put("annotations", anns);
+            }
             choice.put("message", msg);
             choice.put("finish_reason", "stop");
             choices.put(choice);
@@ -37,6 +43,34 @@ public class OpenAiCompat {
             return resp;
         } catch (Exception e) {
             return errorResponse("Failed to build response: " + e.getMessage());
+        }
+    }
+
+    /** 构建流式 SSE 的 annotations chunk (引用文献, 在正文之后发送) */
+    public static String buildStreamAnnotationsChunk(String model, java.util.List<JSONObject> annotations) {
+        try {
+            JSONObject chunk = new JSONObject();
+            chunk.put("id", "chatcmpl-" + System.currentTimeMillis());
+            chunk.put("object", "chat.completion.chunk");
+            chunk.put("created", System.currentTimeMillis() / 1000);
+            chunk.put("model", model);
+
+            JSONArray choices = new JSONArray();
+            JSONObject choice = new JSONObject();
+            choice.put("index", 0);
+
+            JSONObject delta = new JSONObject();
+            JSONArray anns = new JSONArray();
+            for (JSONObject a : annotations) anns.put(a);
+            delta.put("annotations", anns);
+            choice.put("delta", delta);
+            choice.put("finish_reason", JSONObject.NULL);
+
+            choices.put(choice);
+            chunk.put("choices", choices);
+            return "data: " + chunk.toString() + "\n\n";
+        } catch (Exception e) {
+            return "";
         }
     }
 
@@ -120,7 +154,7 @@ public class OpenAiCompat {
             doc.put("openapi", "3.0.0");
             JSONObject info = new JSONObject();
             info.put("title", "XiaoAiBridge");
-            info.put("version", "5.1.1");
+            info.put("version", "5.1.2");
             info.put("description", "把小米超级小爱(com.miui.voiceassist)的 AI 能力暴露为 OpenAI 兼容 API");
             doc.put("info", info);
 

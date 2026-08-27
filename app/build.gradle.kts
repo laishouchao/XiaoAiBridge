@@ -10,8 +10,8 @@ android {
         applicationId = "io.github.guocheng1378.xiaoaibridge"
         minSdk = 26
         targetSdk = 34
-        versionCode = 53
-        versionName = "5.1.1"
+        versionCode = 54
+        versionName = "5.1.2"
     }
 
     signingConfigs {

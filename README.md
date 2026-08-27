@@ -17,6 +17,7 @@
 ## 功能
 
 - **OpenAI 兼容**：`POST /v1/chat/completions`（支持流式 SSE + 非流式）
+- **引用文献（annotations）**：回答来自联网检索时，引用来源以 OpenAI 标准 `message.annotations[].url_citation` 返回（含 `title`/`url`），正文不再混入引用 ID 噪声
 - **单一模型**：`model` 字段只有一个值 `XiaoAi`（底层为超级小爱 NLP 引擎，见下方"模型"章节）
 - **多轮对话**：模块无状态，由客户端携带完整 messages 历史实现
 - **管理**：`GET /v1/models` / `GET /health` / 配置热重载
@@ -131,6 +132,35 @@ curl http://127.0.0.1:8787/v1/models
 | > 1.2 | "回答要求：有创意、发散、生动，可以适当发挥。" |
 | 其他 / 不传 | 无额外提示 |
 
+### 引用文献（annotations）
+
+小爱回答若来自联网检索，会先下发 `Template.LLMReferenceInfo` 事件（引用来源列表）。模块将其转换为 OpenAI 标准的 `annotations` 字段，正文不再混入引用 ID 噪声：
+
+```json
+{
+  "message": {
+    "role": "assistant",
+    "content": "现在是北京时间17时08分。",
+    "annotations": [
+      {
+        "type": "url_citation",
+        "url_citation": {
+          "start_index": 0,
+          "end_index": 0,
+          "title": "北京时间在线校准",
+          "url": "https://time.tianqi.com/"
+        }
+      }
+    ]
+  }
+}
+```
+
+- `title` ← 引用条目标题；`url` ← 引用页面真实链接
+- `start_index`/`end_index` 恒为 0——小爱不提供引用在正文中的位置区间，客户端按整体来源展示即可
+- 流式模式下，annotations 作为独立 chunk 在正文之后、`finish_reason` 之前发送
+- 纯闲聊类回答（未触发联网检索）无 `annotations` 字段
+
 ### 多轮对话与 System Prompt
 
 - **多轮对话**: 模块无状态，客户端每次请求需携带完整 messages 历史（拼接后总字节 ≤ ~24KB）
@@ -144,7 +174,7 @@ curl http://127.0.0.1:8787/v1/models
 2. **并发上限 ~2** — 超过后请求超时，建议客户端串行或限流
 3. **输出无硬性截断** — `max_tokens` 仅作为提示，实际输出由 AI 自行决定
 4. **token 计数始终为 0** — `usage` 字段不反映真实 token 数
-5. **响应内容噪声** — 回复开头可能包含随机字符串（桥接层噪声）
+5. **引用位置缺失** — `annotations` 的 `start_index`/`end_index` 恒为 0（小爱不提供引用在正文中的位置）
 6. **超限请求耗时 ~25s** — 超时等待而非立即拒绝
 7. **模型不可选** — 仅一个 `XiaoAi` 模型，`model` 参数为占位，无法切换后端引擎
 
@@ -170,11 +200,12 @@ curl http://127.0.0.1:8787/v1/models
 git clone https://github.com/laishouchao/XiaoAiBridge
 # Android Studio 打开，编译即可
 # 推送 tag 触发 GitHub Actions 自动构建 Release
-git tag v5.1.1 && git push origin v5.1.1
+git tag v5.1.2 && git push origin v5.1.2
 ```
 
 ## 版本历史
 
+- **v5.1.2** (2026-08-27): 新增引用文献支持——`Template.LLMReferenceInfo` 转换为 OpenAI 标准 `annotations[].url_citation`（流式+非流式），修复回复正文混入引用 ID 噪声的问题
 - **v5.1.1** (2026-08-27): 模型列表精简为单一 `XiaoAi`，移除全部别名与前缀分支；文档修正至真实情况——`model`/`chatId` 参数不透传、`/v1/chat/reset` 为空操作
 - **v5.1.0** (2026-08-18): 精简重构，移除 LLM 代理/exec/root 管理，仅保留核心 AI→API 功能
 - **v5.0.1** (2026-08-18): 修复 root 状态检测，UI 文案统一为"超级小爱"
