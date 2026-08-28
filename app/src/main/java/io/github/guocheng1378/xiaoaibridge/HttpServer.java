@@ -357,8 +357,11 @@ public class HttpServer {
         String text = sb.toString().trim();
         String paramText = paramSb.toString().trim();
 
-        // 自动分块: 超过单次上限(~24.7KB)时滚动摘要, 客户端无感 (v5.2.0)
-        if (Config.AUTO_CHUNK && text.getBytes("UTF-8").length > QUERY_MAX_BYTES) {
+        // 自动分块: 超过单次上限时滚动摘要, 客户端无感 (v5.2.0)
+        // v5.3.1: 包含 paramText (tools prompt 等) 的长度计算
+        int totalBytes = text.getBytes("UTF-8").length
+                + (paramText.isEmpty() ? 0 : paramText.getBytes("UTF-8").length);
+        if (Config.AUTO_CHUNK && totalBytes > QUERY_MAX_BYTES) {
             try {
                 text = chunkedPrompt(text, lastRole, lastContent, lastStart, paramText);
             } catch (Exception e) {
