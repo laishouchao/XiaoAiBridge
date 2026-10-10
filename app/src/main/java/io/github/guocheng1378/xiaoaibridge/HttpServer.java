@@ -167,7 +167,7 @@ public class HttpServer {
             } else if ("/v1/admin/status".equals(path) && "GET".equals(method)) {
                 JSONObject st = new JSONObject();
                 st.put("status", "ok");
-                st.put("version", "5.4.0");
+                st.put("version", "5.4.1");
                 st.put("model", Config.MODEL_NAME);
                 st.put("socket", Config.activeSocket);
                 st.put("routes", 0);
@@ -276,10 +276,49 @@ public class HttpServer {
             }
         }
 
+        // v5.4.1: 支持 response_format, json_schema, format, strict_json
+        boolean v1JsonMode = false;
+        JSONObject v1JsonSchema = null;
+        JSONObject v1Rf = reqObj.optJSONObject("response_format");
+        if (v1Rf != null) {
+            String rfType = v1Rf.optString("type", "");
+            if ("json_schema".equals(rfType)) {
+                v1JsonMode = true;
+                v1JsonSchema = v1Rf.optJSONObject("json_schema");
+            } else if ("json_object".equals(rfType)) {
+                v1JsonMode = true;
+            }
+        }
+        if (!v1JsonMode && reqObj.has("json_schema")) {
+            v1JsonMode = true;
+            v1JsonSchema = reqObj.optJSONObject("json_schema");
+        }
+        if (!v1JsonMode) {
+            Object fmt = reqObj.opt("format");
+            if (fmt instanceof String && "json".equalsIgnoreCase((String) fmt)) {
+                v1JsonMode = true;
+            } else if (fmt instanceof JSONObject) {
+                v1JsonMode = true;
+                v1JsonSchema = (JSONObject) fmt;
+            } else if (reqObj.optBoolean("strict_json", false)) {
+                v1JsonMode = true;
+            }
+        }
+
+        if (v1JsonMode) {
+            text = text + "\n" + OpenAiCompat.buildStructuredOutputsPrompt(v1JsonSchema);
+        }
+
         CliClient.CliResult r = chatWithRetry(text, chatId, agentId, null, useImages);
+        String reply = r.reply;
+        if (v1JsonMode && reply != null) {
+            String j = OpenAiCompat.extractJson(reply);
+            reply = j != null ? j : OpenAiCompat.buildFallbackJson(reply);
+        }
+
         JSONObject resp = new JSONObject();
         resp.put("ok", r.error == null);
-        resp.put("reply", r.reply);
+        resp.put("reply", reply);
         if (r.error != null) resp.put("error", r.error);
         if (r.chatId != null) resp.put("chatId", r.chatId);
         resp.put("frames", r.frames);
@@ -354,13 +393,38 @@ public class HttpServer {
             }
         }
 
-        // JSON 模式 + 参数映射 (独立构建, 分块时只附加到最终提问)
+        // v5.4.1: JSON 模式 + 结构化输出 (Structured Outputs)
         boolean jsonMode = false;
-        StringBuilder paramSb = new StringBuilder();
+        JSONObject jsonSchemaObj = null;
         JSONObject rf = reqObj.optJSONObject("response_format");
-        if (rf != null && "json_object".equals(rf.optString("type", ""))) {
+        if (rf != null) {
+            String rfType = rf.optString("type", "");
+            if ("json_schema".equals(rfType)) {
+                jsonMode = true;
+                jsonSchemaObj = rf.optJSONObject("json_schema");
+            } else if ("json_object".equals(rfType)) {
+                jsonMode = true;
+            }
+        }
+        if (!jsonMode && reqObj.has("json_schema")) {
             jsonMode = true;
-            paramSb.append("严格要求：你必须只输出一个合法 JSON 对象。禁止使用 Markdown、列表符号、解释文字。示例格式：{\"key\":\"value\"}\n");
+            jsonSchemaObj = reqObj.optJSONObject("json_schema");
+        }
+        if (!jsonMode) {
+            Object fmt = reqObj.opt("format");
+            if (fmt instanceof String && "json".equalsIgnoreCase((String) fmt)) {
+                jsonMode = true;
+            } else if (fmt instanceof JSONObject) {
+                jsonMode = true;
+                jsonSchemaObj = (JSONObject) fmt;
+            } else if (reqObj.optBoolean("strict_json", false)) {
+                jsonMode = true;
+            }
+        }
+
+        StringBuilder paramSb = new StringBuilder();
+        if (jsonMode) {
+            paramSb.append(OpenAiCompat.buildStructuredOutputsPrompt(jsonSchemaObj)).append("\n");
         }
         double temp = reqObj.optDouble("temperature", -1);
         if (temp >= 0) {
@@ -424,9 +488,42 @@ public class HttpServer {
             // v5.3.0: 流式模式下累积完整回复, 结束后检测 tool_calls
             StringBuilder streamAccum = hasTools ? new StringBuilder() : null;
 
+            // v5.4.1: 流式模式下过滤开场白 / Markdown 语法 (如果开启了 jsonMode)
+            final boolean isJson = jsonMode;
+            final boolean[] jsonStarted = new boolean[]{false};
+            final StringBuilder jsonPreambleBuf = new StringBuilder();
+
             CliClient.CliResult r = chatWithRetry(text, Config.API_CHAT_ID, agentId, t -> {
                 try {
                     if (streamAccum != null) streamAccum.append(t);
+                    if (isJson) {
+                        if (!jsonStarted[0]) {
+                            jsonPreambleBuf.append(t);
+                            String bufStr = jsonPreambleBuf.toString();
+                            int firstObj = bufStr.indexOf('{');
+                            int firstArr = bufStr.indexOf('[');
+                            int startIdx = -1;
+                            if (firstObj >= 0 && (firstArr < 0 || firstObj < firstArr)) {
+                                startIdx = firstObj;
+                            } else if (firstArr >= 0) {
+                                startIdx = firstArr;
+                            }
+                            if (startIdx >= 0) {
+                                jsonStarted[0] = true;
+                                String startChunk = bufStr.substring(startIdx);
+                                if (startChunk.contains("```")) {
+                                    startChunk = startChunk.replace("```json", "").replace("```JSON", "").replace("```", "");
+                                }
+                                os.write(OpenAiCompat.buildStreamChunk(model, startChunk, null).getBytes("UTF-8"));
+                                os.flush();
+                            }
+                            return;
+                        } else {
+                            if (t.contains("```")) {
+                                t = t.replace("```json", "").replace("```JSON", "").replace("```", "");
+                            }
+                        }
+                    }
                     os.write(OpenAiCompat.buildStreamChunk(model, t, null).getBytes("UTF-8"));
                     os.flush();
                 } catch (Exception ignored) {}
@@ -475,7 +572,7 @@ public class HttpServer {
 
         if (jsonMode) {
             String j = OpenAiCompat.extractJson(reply);
-            reply = j != null ? j : "{}";
+            reply = j != null ? j : OpenAiCompat.buildFallbackJson(reply);
         }
         sendResponse(os, 200, OpenAiCompat.buildSyncResponse(model, reply,
                 AiClientHook.getAnnotations()).toString());

@@ -433,32 +433,174 @@ public class OpenAiCompat {
         return sb.toString();
     }
 
-    /** JSON 模式兜底: 从回答中提取合法 JSON (或包装) */
+    /**
+     * 构建结构化输出 (Structured Outputs) / JSON 模式的提示词强约束
+     */
+    public static String buildStructuredOutputsPrompt(JSONObject jsonSchemaObj) {
+        StringBuilder sb = new StringBuilder();
+        if (jsonSchemaObj != null) {
+            String schemaName = jsonSchemaObj.optString("name", "response");
+            JSONObject schema = jsonSchemaObj.optJSONObject("schema");
+            if (schema == null) {
+                schema = jsonSchemaObj;
+            }
+            sb.append("【结构化输出严格约束 - Structured Outputs】\n");
+            sb.append("你必须严格输出一个符合以下 JSON Schema 的纯 JSON 文本。\n");
+            sb.append("Schema 名称: ").append(schemaName).append("\n");
+            sb.append("Schema 规范:\n").append(schema.toString()).append("\n");
+            sb.append("必须严格遵守的规则：\n");
+            sb.append("1. 你输出的全部内容必须且只能是一个严格合法的纯 JSON 文本，第一个字符必须是 '{' 或 '['，最后一个字符必须是 '}' 或 ']'。\n");
+            sb.append("2. 绝对禁止输出任何 Markdown 格式代码块标签（严禁使用 ```json 或 ``` 标签包裹）。\n");
+            sb.append("3. 绝对禁止输出任何问候语、开场白（例如“好的”、“已为您生成”等）或结尾解释说明文字。\n");
+            sb.append("4. 输出的 JSON 键值和数据类型必须与上述 Schema 严格一致，不得缺失必填属性。\n");
+        } else {
+            sb.append("【JSON 模式严格约束】\n");
+            sb.append("你必须只输出一个严格合法的纯 JSON 文本，第一个字符必须是 '{' 或 '['，最后一个字符必须是 '}' 或 ']'。\n");
+            sb.append("绝对禁止使用 Markdown 代码块标签（严禁使用 ```json 或 ```），绝对禁止输出任何问候语、开场白或解释说明文字。\n");
+        }
+        return sb.toString();
+    }
+
+    /** 检查字符串是否为严格合法的 JSONObject 或 JSONArray */
+    public static boolean isValidJson(String s) {
+        if (s == null) return false;
+        String t = s.trim();
+        if (t.startsWith("{") && t.endsWith("}")) {
+            try {
+                new JSONObject(t);
+                return true;
+            } catch (Exception ignored) {}
+        }
+        if (t.startsWith("[") && t.endsWith("]")) {
+            try {
+                new JSONArray(t);
+                return true;
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    /**
+     * 括号计数法提取最外层平衡的完整 JSON Object 或 Array
+     */
+    private static String extractOutermostJson(String text) {
+        if (text == null) return null;
+        int firstObj = text.indexOf('{');
+        int firstArr = text.indexOf('[');
+        if (firstObj < 0 && firstArr < 0) return null;
+
+        boolean startWithObj = (firstObj >= 0 && (firstArr < 0 || firstObj < firstArr));
+        char openChar = startWithObj ? '{' : '[';
+        char closeChar = startWithObj ? '}' : ']';
+        int startIdx = startWithObj ? firstObj : firstArr;
+
+        int depth = 0;
+        boolean inString = false;
+        boolean escape = false;
+
+        for (int i = startIdx; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (c == '\\') {
+                escape = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (!inString) {
+                if (c == openChar) {
+                    depth++;
+                } else if (c == closeChar) {
+                    depth--;
+                    if (depth == 0) {
+                        String candidate = text.substring(startIdx, i + 1).trim();
+                        if (isValidJson(candidate)) {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 严格从回复中提取与校验 JSON (支持 Object 与 Array, 剥离 Markdown 与开场白/结语)
+     */
     public static String extractJson(String s) {
         if (s == null) return null;
         String t = s.trim();
         if (t.isEmpty()) return null;
-        try { new JSONObject(t); return t; } catch (Exception ignored) {}
-        int i1 = t.indexOf("```json");
-        if (i1 >= 0) {
-            int i2 = t.indexOf("```", i1 + 7);
-            if (i2 > i1) {
-                String frag = t.substring(i1 + 7, i2).trim();
-                try { new JSONObject(frag); return frag; } catch (Exception ignored) {}
+
+        // 1. 如果本身就是合法的纯 JSONObject 或 JSONArray
+        if (isValidJson(t)) {
+            return t;
+        }
+
+        // 2. 剥离 Markdown 代码块 ```json ... ``` 或 ``` ... ```
+        int mdStart = t.indexOf("```json");
+        int offset = 7;
+        if (mdStart < 0) {
+            mdStart = t.indexOf("```JSON");
+            offset = 7;
+        }
+        if (mdStart < 0) {
+            mdStart = t.indexOf("```");
+            offset = 3;
+        }
+        if (mdStart >= 0) {
+            int mdEnd = t.indexOf("```", mdStart + offset);
+            if (mdEnd > mdStart) {
+                String frag = t.substring(mdStart + offset, mdEnd).trim();
+                if (isValidJson(frag)) {
+                    return frag;
+                }
+                String inner = extractOutermostJson(frag);
+                if (inner != null) return inner;
             }
         }
-        i1 = t.indexOf("{");
-        int i2 = t.lastIndexOf("}");
-        if (i1 >= 0 && i2 > i1) {
-            String frag = t.substring(i1, i2 + 1);
-            try { new JSONObject(frag); return frag; } catch (Exception ignored) {}
+
+        // 3. 寻找最外层的平衡匹配 '{' ... '}' 或 '[' ... ']'
+        String outermost = extractOutermostJson(t);
+        if (outermost != null) {
+            return outermost;
         }
+
+        // 4. 容错尝试：截取第一个 '{' 到最后一个 '}'
+        int firstObj = t.indexOf('{');
+        int lastObj = t.lastIndexOf('}');
+        if (firstObj >= 0 && lastObj > firstObj) {
+            String frag = t.substring(firstObj, lastObj + 1).trim();
+            if (isValidJson(frag)) return frag;
+        }
+
+        // 5. 容错尝试：截取第一个 '[' 到最后一个 ']'
+        int firstArr = t.indexOf('[');
+        int lastArr = t.lastIndexOf(']');
+        if (firstArr >= 0 && lastArr > firstArr) {
+            String frag = t.substring(firstArr, lastArr + 1).trim();
+            if (isValidJson(frag)) return frag;
+        }
+
+        return null;
+    }
+
+    /**
+     * 无法从模型回复提取出合法 JSON 时的严格 fallback JSON
+     */
+    public static String buildFallbackJson(String rawText) {
         try {
-            JSONObject obj = new JSONObject();
-            obj.put("reply", s);
-            return obj.toString();
+            JSONObject errObj = new JSONObject();
+            errObj.put("error", "Failed to parse structured JSON from model output");
+            errObj.put("raw_output", rawText == null ? "" : rawText);
+            return errObj.toString();
         } catch (Exception e) {
-            return null;
+            return "{}";
         }
     }
 }
