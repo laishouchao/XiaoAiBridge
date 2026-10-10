@@ -1,10 +1,17 @@
 package io.github.guocheng1378.xiaoaibridge;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.util.Base64;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -54,6 +61,9 @@ public class AiClientHook {
     private static final String CLS_NLP_REQUEST = "com.xiaomi.ai.api.Nlp$Request";
     private static final String CLS_POSTBACK_REQUEST = "com.xiaomi.ai.api.Nlp$PostBackRequest";
     private static final String CLS_LLM_REQUEST = "com.xiaomi.ai.api.Nlp$RequestLargeLanguageModelContent";
+    private static final String CLS_IMAGE_UNDERSTAND = "com.xiaomi.ai.api.MultiModal$ImageUnderstand";
+    private static final String CLS_IMAGE_FRAME_SENDER = "wi1.g";
+    private static final String CLS_NQ0_C = "nq0.c";
     private static final String CLS_CR0_G = "cr0.g";
 
     // 状态
@@ -375,6 +385,8 @@ public class AiClientHook {
                 if ("LLMLoadingCard".equals(name)) return;
                 if ("FrontendPage".equals(name)) return;
                 if ("ResultOperationInfo".equals(name)) return;
+                if ("ImageQAContent".equals(name)) return;
+                if ("SetDisplayProperty".equals(name)) return;
                 // LLMReferenceInfo 是引用来源, 转成 annotations 而非正文
                 if ("LLMReferenceInfo".equals(name)) {
                     collectReferenceInfo(payload);
@@ -392,6 +404,7 @@ public class AiClientHook {
             if (payload != null) {
                 String text = extractTextFromPayload(payload, name, namespace);
                 if (text != null && !text.isEmpty()) {
+                    answerStarted = true;
                     Logger.d("AiClientHook: extracted text: " + truncate(text, 200));
                     onResponse(text, false);
                 }
@@ -621,16 +634,26 @@ public class AiClientHook {
     }
 
     /**
-     * 发送文本查询并等待响应
+     * 发送文本/图片查询并等待响应
      * v5.2.1: 先构建事件取得 event id (即响应 dialog_id), 再与闩锁同锁原子绑定;
      * 响应事件按 dialog_id 门控, 避免上一轮迟到的 Dialog.Finish 提前释放本轮闩锁
+     * v5.4.0: 支持传入 images (JSONArray/List), 构建 MultiModal.ImageUnderstand 事件
      */
     public static CliClient.CliResult chat(String text, String chatId, String agentId, CliClient.TextSink sink, Object images) {
         synchronized (chatLock) {  // v5.3.0: 串行化, 防止并发覆盖 currentDialogId
-        Logger.d("AiClientHook: chat called, text=" + truncate(text, 100));
+        Logger.d("AiClientHook: chat called, text=" + truncate(text, 100) + ", hasImages=" + (images != null));
 
         // 1. 先构建请求事件 (耗时操作, 在重置响应槽之前完成)
-        Object event = buildRequestEvent(text);
+        Object event = null;
+        if (images != null) {
+            event = buildImageUnderstandEvent(text, images);
+            if (event == null) {
+                Logger.d("AiClientHook: buildImageUnderstandEvent returned null, falling back to buildRequestEvent");
+                event = buildRequestEvent(text);
+            }
+        } else {
+            event = buildRequestEvent(text);
+        }
         String eventId = extractEventId(event);
 
         // 2. 重置响应状态; 闩锁与会话 id 同锁原子设置, 不留被旧事件击中的窗口
@@ -676,6 +699,202 @@ public class AiClientHook {
         }  // v5.3.0: end chatLock
     }
 
+    /**
+     * 通过 Super XiaoAi 内部的 ImageFrameSender (wi1.g.a) 上传图片，获取服务端 fileId
+     */
+    private static List<String> uploadBitmapsViaFrameSender(List<Bitmap> bitmaps, ClassLoader cl) {
+        if (bitmaps == null || bitmaps.isEmpty()) return Collections.emptyList();
+        try {
+            Class<?> gClass = Class.forName(CLS_IMAGE_FRAME_SENDER, false, cl);
+            Field aField = gClass.getField("a");
+            Object senderInstance = aField.get(null);
+            if (senderInstance == null) {
+                Logger.d("AiClientHook: wi1.g.a instance is null");
+                return Collections.emptyList();
+            }
+
+            Class<?> frameItemClass = null;
+            for (Class<?> inner : gClass.getDeclaredClasses()) {
+                if ("a".equals(inner.getSimpleName())) {
+                    frameItemClass = inner;
+                    break;
+                }
+            }
+            if (frameItemClass == null) {
+                frameItemClass = Class.forName("wi1.g$a", false, cl);
+            }
+
+            Constructor<?> frameCtor = frameItemClass.getConstructor(Bitmap.class, int.class);
+            List<Object> frames = new ArrayList<>();
+            for (Bitmap bmp : bitmaps) {
+                if (bmp != null) {
+                    frames.add(frameCtor.newInstance(bmp, 94));
+                }
+            }
+            if (frames.isEmpty()) return Collections.emptyList();
+
+            Class<?> listenerInterface = Class.forName(CLS_NQ0_C, false, cl);
+            final List<String> fileIds = new ArrayList<>();
+            final CountDownLatch uploadLatch = new CountDownLatch(1);
+
+            Object proxyListener = Proxy.newProxyInstance(
+                cl,
+                new Class<?>[]{listenerInterface},
+                (proxy, method, args) -> {
+                    String mName = method.getName();
+                    if ("onResult".equals(mName)) {
+                        try {
+                            if (args != null && args.length > 0 && args[0] instanceof List) {
+                                List<?> resList = (List<?>) args[0];
+                                for (Object item : resList) {
+                                    if (item != null) {
+                                        try {
+                                            Method getFileId = item.getClass().getMethod("getFileId");
+                                            Object fid = getFileId.invoke(item);
+                                            if (fid != null && !fid.toString().isEmpty()) {
+                                                fileIds.add(fid.toString());
+                                            }
+                                        } catch (Exception ex) {
+                                            Logger.d("AiClientHook: failed to getFileId: " + ex.getMessage());
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (Throwable t) {
+                            Logger.e("AiClientHook: onResult error: " + t.getMessage());
+                        } finally {
+                            uploadLatch.countDown();
+                        }
+                    } else if ("onError".equals(mName)) {
+                        Logger.d("AiClientHook: uploadImageForUpload onError: " + (args != null && args.length > 0 ? args[0] : ""));
+                        uploadLatch.countDown();
+                    } else if ("onProcess".equals(mName) || "onStart".equals(mName)) {
+                        // ignore
+                    }
+                    return null;
+                }
+            );
+
+            String reqId = "multimodal_" + System.currentTimeMillis();
+            Method uploadMethod = gClass.getMethod("uploadImageForUpload", List.class, String.class, String.class, listenerInterface);
+            Logger.d("AiClientHook: uploading " + frames.size() + " images via wi1.g.uploadImageForUpload, reqId=" + reqId);
+            uploadMethod.invoke(senderInstance, frames, reqId, "multimodal_", proxyListener);
+
+            boolean ok = uploadLatch.await(8, TimeUnit.SECONDS);
+            Logger.d("AiClientHook: upload finished ok=" + ok + ", fileIds=" + fileIds);
+            return fileIds;
+        } catch (ClassNotFoundException e) {
+            Logger.d("AiClientHook: wi1.g or nq0.c not found: " + e.getMessage());
+        } catch (Throwable t) {
+            Logger.e("AiClientHook: uploadBitmapsViaFrameSender failed: " + t.getMessage());
+        }
+        return Collections.emptyList();
+    }
+
+    /**
+     * 构建 MultiModal.ImageUnderstand 事件 (v5.4.0)
+     */
+    private static Object buildImageUnderstandEvent(String text, Object images) {
+        try {
+            ClassLoader cl = getHostClassLoader();
+            List<String> base64List = new ArrayList<>();
+            List<Bitmap> bitmaps = new ArrayList<>();
+
+            if (images instanceof JSONArray) {
+                JSONArray arr = (JSONArray) images;
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject obj = arr.optJSONObject(i);
+                    if (obj != null) {
+                        String b64 = obj.optString("base64Data", "");
+                        if (!b64.isEmpty()) {
+                            base64List.add(b64);
+                            try {
+                                byte[] decoded = Base64.decode(b64, Base64.DEFAULT);
+                                Bitmap bmp = BitmapFactory.decodeByteArray(decoded, 0, decoded.length);
+                                if (bmp != null) bitmaps.add(bmp);
+                            } catch (Throwable t) {
+                                Logger.e("AiClientHook: decode bitmap error: " + t.getMessage());
+                            }
+                        }
+                    }
+                }
+            } else if (images instanceof List) {
+                List<?> list = (List<?>) images;
+                for (Object item : list) {
+                    if (item instanceof String) {
+                        String b64 = (String) item;
+                        base64List.add(b64);
+                        try {
+                            byte[] decoded = Base64.decode(b64, Base64.DEFAULT);
+                            Bitmap bmp = BitmapFactory.decodeByteArray(decoded, 0, decoded.length);
+                            if (bmp != null) bitmaps.add(bmp);
+                        } catch (Throwable t) {}
+                    } else if (item instanceof Bitmap) {
+                        bitmaps.add((Bitmap) item);
+                    }
+                }
+            }
+
+            // 1. 尝试通过 wi1.g 上传图片获得 fileId
+            List<String> fileIds = Collections.emptyList();
+            if (!bitmaps.isEmpty()) {
+                fileIds = uploadBitmapsViaFrameSender(bitmaps, cl);
+            }
+
+            // 2. 实例化 com.xiaomi.ai.api.MultiModal$ImageUnderstand
+            Class<?> iuClass = Class.forName(CLS_IMAGE_UNDERSTAND, false, cl);
+            Object payload = iuClass.newInstance();
+
+            // 设置 image_ids (必须非空)
+            Method setImageIds = iuClass.getMethod("setImageIds", List.class);
+            if (!fileIds.isEmpty()) {
+                setImageIds.invoke(payload, fileIds);
+            } else {
+                setImageIds.invoke(payload, Collections.emptyList());
+            }
+
+            // 设置 image_contents (Base64 JPEG 字符串列表)
+            if (!base64List.isEmpty()) {
+                try {
+                    Method setImageContents = iuClass.getMethod("setImageContents", List.class);
+                    setImageContents.invoke(payload, base64List);
+                } catch (NoSuchMethodException e) {
+                    Logger.d("AiClientHook: setImageContents method not found");
+                }
+            }
+
+            // 设置 query
+            if (text != null && !text.isEmpty()) {
+                try {
+                    Method setQuery = iuClass.getMethod("setQuery", String.class);
+                    setQuery.invoke(payload, text);
+                } catch (NoSuchMethodException e) {
+                    Field qField = findField(iuClass, "query");
+                    if (qField != null) {
+                        qField.setAccessible(true);
+                        qField.set(payload, text);
+                    }
+                }
+            }
+
+            // 3. 构建 Event
+            Object event = buildEventViaApiUtils(payload, cl);
+            if (event == null) {
+                event = buildEventManual("MultiModal", "ImageUnderstand", payload, cl);
+            }
+            if (event == null) {
+                Logger.d("AiClientHook: failed to build ImageUnderstand Event");
+                return null;
+            }
+
+            Logger.d("AiClientHook: ImageUnderstand Event ready, toString=" + truncate(event.toString(), 500));
+            return event;
+        } catch (Throwable t) {
+            Logger.e("AiClientHook: buildImageUnderstandEvent failed: " + t.getMessage());
+            return null;
+        }
+    }
+
     /** v5.2.1: 构建 Nlp.RequestLargeLanguageModelContent 事件 (自 sendViaPostEvent 拆出) */
     private static Object buildRequestEvent(String text) {
         try {
@@ -718,10 +937,30 @@ public class AiClientHook {
         return false;
     }
 
-    /** v5.2.1: 从事件 toString 提取 header.id — 即响应事件的 dialog_id */
+    /** v5.2.1: 从事件对象提取 header.id — 即响应事件的 dialog_id */
     private static String extractEventId(Object event) {
         if (event == null) return null;
         try {
+            try {
+                Method getId = event.getClass().getMethod("getId");
+                Object idObj = getId.invoke(event);
+                if (idObj instanceof String && !((String) idObj).isEmpty()) {
+                    return (String) idObj;
+                }
+            } catch (Exception ignored) {}
+
+            try {
+                Method getHeader = event.getClass().getMethod("getHeader");
+                Object header = getHeader.invoke(event);
+                if (header != null) {
+                    Method getId = header.getClass().getMethod("getId");
+                    Object idObj = getId.invoke(header);
+                    if (idObj instanceof String && !((String) idObj).isEmpty()) {
+                        return (String) idObj;
+                    }
+                }
+            } catch (Exception ignored) {}
+
             String s = event.toString();
             int i = s.indexOf("\"id\":\"");
             if (i < 0) return null;

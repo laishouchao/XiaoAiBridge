@@ -167,7 +167,7 @@ public class HttpServer {
             } else if ("/v1/admin/status".equals(path) && "GET".equals(method)) {
                 JSONObject st = new JSONObject();
                 st.put("status", "ok");
-                st.put("version", "5.2.0");
+                st.put("version", "5.4.0");
                 st.put("model", Config.MODEL_NAME);
                 st.put("socket", Config.activeSocket);
                 st.put("routes", 0);
@@ -245,13 +245,38 @@ public class HttpServer {
         String chatId = reqObj.has("chatId") ? reqObj.optString("chatId") : null;
         String agentId = reqObj.has("agentId") ? reqObj.optString("agentId") : null;
 
-        if (text.length() == 0) {
-            sendResponse(os, 400, OpenAiCompat.buildError(
-                "missing 'text'", "invalid_request_error", "missing_text").toString());
-            return;
+        JSONArray imagesArr = new JSONArray();
+        if (reqObj.has("image")) {
+            JSONObject ic = OpenAiCompat.imageToContent(reqObj.optString("image"));
+            if (ic != null) imagesArr.put(ic);
+        }
+        if (reqObj.has("images")) {
+            JSONArray arr = reqObj.optJSONArray("images");
+            if (arr != null) {
+                for (int i = 0; i < arr.length(); i++) {
+                    Object item = arr.opt(i);
+                    if (item instanceof String) {
+                        JSONObject ic = OpenAiCompat.imageToContent((String) item);
+                        if (ic != null) imagesArr.put(ic);
+                    } else if (item instanceof JSONObject) {
+                        imagesArr.put(item);
+                    }
+                }
+            }
+        }
+        JSONArray useImages = imagesArr.length() > 0 ? imagesArr : null;
+
+        if (text.isEmpty()) {
+            if (useImages != null) {
+                text = "请描述这张图片";
+            } else {
+                sendResponse(os, 400, OpenAiCompat.buildError(
+                    "missing 'text'", "invalid_request_error", "missing_text").toString());
+                return;
+            }
         }
 
-        CliClient.CliResult r = chatWithRetry(text, chatId, agentId, null, null);
+        CliClient.CliResult r = chatWithRetry(text, chatId, agentId, null, useImages);
         JSONObject resp = new JSONObject();
         resp.put("ok", r.error == null);
         resp.put("reply", r.reply);
@@ -374,9 +399,13 @@ public class HttpServer {
         }
         JSONArray useImages = imagesArr.length() > 0 ? imagesArr : null;
         if (text.isEmpty()) {
-            sendResponse(os, 400, OpenAiCompat.buildError(
-                "messages is required", "invalid_request_error", "missing_messages").toString());
-            return;
+            if (useImages != null) {
+                text = "请描述这张图片";
+            } else {
+                sendResponse(os, 400, OpenAiCompat.buildError(
+                    "messages is required", "invalid_request_error", "missing_messages").toString());
+                return;
+            }
         }
 
         // model 参数仅为名称, 底层始终为同一超级小爱引擎 (agentId 在 Hook 层未使用)
